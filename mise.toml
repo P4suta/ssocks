@@ -204,3 +204,7 @@ run = [
   "gleam run -m environment_smoke --target javascript --runtime deno",
   "gleam run -m environment_smoke --target javascript --runtime bun",
 ]
+
+[tasks.interop]
+description = "Round-trip through a real shadowsocks-rust server; the only test that proves this is Shadowsocks"
+run = "node scripts/interop.mjs"
