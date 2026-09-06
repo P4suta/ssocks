@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name = "ssocks_codec"
+# x-release-please-start-version
+version = "0.1.0"
+# x-release-please-end
+gleam = ">= 1.18.0 and < 2.0.0"
+internal_modules = ["ssocks/internal/*"]
+
+description = "Sans-IO Shadowsocks AEAD codec for Gleam, running on Erlang and Node-family JavaScript"
+licences = ["MIT", "Apache-2.0"]
+repository = { type = "github", user = "P4suta", repo = "shadowsocks" }
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+gleam_crypto = ">= 1.6.0 and < 1.7.0"
+
+[dev_dependencies]
+gleeunit = ">= 1.9.0 and < 1.12.0"

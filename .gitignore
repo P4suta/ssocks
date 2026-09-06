@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+*.beam
+*.ez
+build/
+erl_crash.dump
+node_modules/
+/reports/

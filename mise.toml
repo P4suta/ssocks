@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[tools]
+gleam = "1.18.1"
+erlang = "29.0.5"
+node = "24.19.0"
+deno = "2.9.5"
+bun = "1.3.14"
+uv = "0.12.0"
+lefthook = "2.1.9"
+committed = "1.1.11"
+typos = "1.48.0"
+taplo = "0.10.0"
+actionlint = "1.7.12"
+gitleaks = "8.30.1"
+yamllint = "1.38.0"
+rumdl = "0.2.43"
+
+[tasks.bootstrap]
+description = "Install pinned tools, fetch dependencies for both packages, install hooks"
+run = [
+  "mise install",
+  "mise run deps",
+  "lefthook install",
+]
+
+[tasks.deps]
+description = "Download dependencies for both packages"
+run = [
+  "mise run deps-codec",
+  "mise run deps-net",
+]
+
+[tasks."deps-codec"]
+dir = "packages/ssocks_codec"
+run = "gleam deps download"
+
+[tasks."deps-net"]
+dir = "packages/ssocks"
+run = "gleam deps download"
+
+# --- formatting -------------------------------------------------------------
+
+[tasks.fmt]
+description = "Check Gleam formatting in both packages"
+run = [
+  "mise run fmt-codec",
+  "mise run fmt-net",
+]
+
+[tasks."fmt-codec"]
+dir = "packages/ssocks_codec"
+run = "gleam format --check src test"
+
+[tasks."fmt-net"]
+dir = "packages/ssocks"
+run = "gleam format --check src test"
+
+[tasks."fmt-fix"]
+description = "Rewrite Gleam sources into canonical format"
+run = [
+  "mise run fmt-fix-codec",
+  "mise run fmt-fix-net",
+]
+
+[tasks."fmt-fix-codec"]
+dir = "packages/ssocks_codec"
+run = "gleam format src test"
+
+[tasks."fmt-fix-net"]
+dir = "packages/ssocks"
+run = "gleam format src test"
+
+# --- build ------------------------------------------------------------------
+
+[tasks.build]
+description = "Build every package on every target it supports, warnings denied"
+run = [
+  "mise run build-codec",
+  "mise run build-net",
+]
+
+[tasks."build-codec"]
+description = "The codec must build on BOTH targets; this guards the sans-IO invariant"
+dir = "packages/ssocks_codec"
+run = [
+  "gleam build --target erlang --warnings-as-errors",
+  "gleam build --target javascript --warnings-as-errors",
+  "node ../../scripts/no-warnings.mjs erlang javascript",
+]
+
+[tasks."build-net"]
+dir = "packages/ssocks"
+run = [
+  "gleam build --target erlang --warnings-as-errors",
+  "node ../../scripts/no-warnings.mjs erlang",
+]
+
+# --- tests ------------------------------------------------------------------
+
+[tasks.test]
+description = "Unit tests: codec on Erlang and all three JS runtimes, net on Erlang"
+run = [
+  "mise run test-codec",
+  "mise run test-net",
+]
+
+[tasks."test-codec"]
+dir = "packages/ssocks_codec"
+run = [
+  "gleam test --target erlang",
+  "gleam test --target javascript --runtime node",
+  "gleam build --target javascript",
+  "node ../../scripts/deno-test.mjs",
+  "gleam test --target javascript --runtime bun",
+]
+
+[tasks."test-net"]
+dir = "packages/ssocks"
+run = "gleam test --target erlang"
+
+[tasks."test-property"]
+description = "Deterministic property run with a fixed seed; reproduce a failure with the same seed"
+dir = "packages/ssocks_codec"
+run = [
+  "gleam run -m property_smoke --target erlang -- 10000 24301",
+  "gleam run -m property_smoke --target javascript --runtime node -- 10000 24301",
+]
+
+[tasks."test-fuzz"]
+description = "Feed adversarial and random bytes to every decoder; nothing may panic"
+dir = "packages/ssocks_codec"
+run = [
+  "gleam run -m fuzz_smoke --target erlang -- 50000 91117",
+  "gleam run -m fuzz_smoke --target javascript --runtime node -- 50000 91117",
+]
+
+[tasks."test-cross"]
+description = "Erlang and JavaScript must produce byte-identical output for every vector"
+dir = "packages/ssocks_codec"
+run = "node ../../scripts/cross-target-vectors.mjs"
+
+# --- diagnosis --------------------------------------------------------------
+
+[tasks.cover]
+description = "Erlang line coverage for the codec"
+dir = "packages/ssocks_codec"
+run = "node ../../scripts/coverage.mjs"
+
+[tasks.mutants]
+description = "Mutation testing on the codec, dogfooding gleam_mutants"
+dir = "packages/ssocks_codec"
+run = "gleam run -m gleam_mutants -- run --strict --test-command 'gleam test'"
+
+# --- docs and lint ----------------------------------------------------------
+
+[tasks.docs]
+description = "Build API docs for both packages and lint Markdown"
+run = [
+  "mise run docs-codec",
+  "mise run docs-net",
+  "rumdl check .",
+]
+
+[tasks."docs-codec"]
+dir = "packages/ssocks_codec"
+run = "gleam docs build"
+
+[tasks."docs-net"]
+dir = "packages/ssocks"
+run = "gleam docs build"
+
+[tasks.lint]
+description = "Spelling, TOML, workflows, YAML, secrets, and licence compliance"
+run = [
+  "typos",
+  "taplo check mise.toml packages/ssocks_codec/gleam.toml packages/ssocks/gleam.toml",
+  "actionlint",
+  "yamllint --strict .github lefthook.yml",
+  "gitleaks dir . --no-banner --redact --verbose",
+  "uvx --from 'reuse[charset-normalizer]==6.2.0' reuse lint",
+]
+
+[tasks.check]
+description = "Everything CI runs, in the order that fails fastest"
+run = [
+  "mise run fmt",
+  "mise run build",
+  "mise run test",
+  "mise run test-property",
+  "mise run test-fuzz",
+  "mise run test-cross",
+  "mise run docs",
+  "mise run lint",
+]
+
+[tasks.backends]
+description = "Report which AEAD backend each runtime actually selects"
+dir = "packages/ssocks_codec"
+run = [
+  "gleam run -m environment_smoke --target erlang",
+  "gleam run -m environment_smoke --target javascript --runtime node",
+  "gleam run -m environment_smoke --target javascript --runtime deno",
+  "gleam run -m environment_smoke --target javascript --runtime bun",
+]
