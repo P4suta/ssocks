@@ -170,15 +170,13 @@ pub fn a_stream_cipher_url_is_refused_with_its_reason_test() {
 }
 
 pub fn a_url_without_a_port_is_refused_test() {
-  let assert Error(url.BadServer(reason)) =
-    url.parse(sip002("aes-256-gcm:p", "@h.example"))
-  assert reason == address.MissingPort("h.example")
+  assert url.parse(sip002("aes-256-gcm:p", "@h.example"))
+    == Error(url.BadServer(url.NoPort))
 }
 
 pub fn a_url_with_an_unreadable_port_is_refused_test() {
-  let assert Error(url.BadServer(address.MalformedPort(text))) =
-    url.parse(sip002("aes-256-gcm:p", "@h.example:not-a-port"))
-  assert text == "not-a-port"
+  assert url.parse(sip002("aes-256-gcm:p", "@h.example:not-a-port"))
+    == Error(url.BadServer(url.PortNotANumber))
 }
 
 pub fn credentials_with_no_separator_are_refused_test() {
@@ -220,6 +218,34 @@ pub fn an_error_never_carries_the_password_test() {
   ]
 
   assert all_free_of(refusals, secret)
+}
+
+pub fn an_at_sign_in_a_password_does_not_leak_its_tail_test() {
+  // The authority is whatever follows the last at sign. That is right when
+  // there is a host, and wrong when the password contains an at sign and the
+  // host was left out — then the text read as the authority is the tail of the
+  // password, and it is the case where the authority fails to parse, so it is
+  // exactly the case that produces an error.
+  //
+  // From inside there is no way to tell the two apart, so the text is never
+  // repeated. Only the kind of problem is.
+  let assert Error(reason) = url.parse("ss://aes-256-gcm:hunter@battery-staple")
+
+  assert !string.contains(string.inspect(reason), "battery-staple")
+  assert !string.contains(url.explain(reason), "battery-staple")
+  // The kind still has to come through, or the caller learns nothing.
+  assert reason == url.BadServer(url.NoPort)
+}
+
+pub fn a_method_name_is_still_named_test() {
+  // The counterpart to the rule above. A method is structurally the text
+  // before the first colon and a password is structurally the text after it,
+  // so a method name is never part of a password and saying which cipher was
+  // refused costs nothing.
+  let assert Error(url.UnsupportedMethod(reason)) =
+    url.parse("ss://aes-512-gcm:whatever@h.example:1")
+
+  assert string.contains(method.explain(reason), "aes-512-gcm")
 }
 
 pub fn redacted_does_not_carry_the_password_test() {

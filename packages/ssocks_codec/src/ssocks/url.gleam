@@ -34,9 +34,18 @@
 //// ### What an error may say
 ////
 //// A parse failure is the moment a caller most wants to print the input, and
-//// the input is a credential. So no error in this module carries any part of
-//// the URL that could be a password. They name the shape of the problem and
-//// the field it was in, and nothing else.
+//// the input is a credential. So no error in this module repeats text that
+//// could be part of a password. They name the shape of the problem and the
+//// field it was in.
+////
+//// Two things are named, and the line between them is structural rather than a
+//// judgement call. The scheme and the method are said out loud: a scheme ends
+//// at the first `://` and a method ends at the first `:` of the credentials,
+//// and a password begins after that colon, so neither can be password text.
+//// What follows the last `@` is not said, because it is the authority only if
+//// that `@` was the separator — for a password containing one, with the host
+//// left out, the text there is the tail of the password, and that is exactly
+//// the case where reading it fails and an error is produced.
 ////
 //// The same applies to a `Config` that parsed: `echo` and `string.inspect`
 //// reach inside opaque types, so use `redacted` where one has to be printed.
@@ -47,7 +56,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import gleam/bit_array
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -95,13 +103,35 @@ pub type UrlError {
   MissingCredentials
   /// Credentials that are neither `method:password` nor base64 of it.
   MalformedCredentials
-  /// A method this library will not use. Carries the reason, so the caller can
-  /// say which cipher and why rather than "invalid URL".
+  /// A method this library will not use. Carries the reason, and so the method
+  /// name, so the caller can say which cipher and why rather than "invalid
+  /// URL". Safe because a method is structurally the text before the first
+  /// colon and a password is the text after it.
   UnsupportedMethod(reason: method.UnsupportedMethod)
-  /// The host and port could not be read as a server address.
-  BadServer(reason: address.AddressError)
+  /// The host and port could not be read as a server address. Names the kind
+  /// of problem and never the text; see `ServerProblem`.
+  BadServer(problem: ServerProblem)
   /// A percent escape that is not one, in the named field.
   MalformedEscape(field: UrlField)
+}
+
+/// What was wrong with the part that should have been a host and a port.
+///
+/// Deliberately without the text, which is the one error here that cannot
+/// quote its input. The authority is whatever follows the last `@`, which is
+/// right whenever there is a host and wrong when the password contains an `@`
+/// and the host was left out — and that second case is precisely the one where
+/// the authority fails to parse, so it is the case that produces this error.
+/// From inside there is no way to tell them apart, so nothing is repeated.
+pub type ServerProblem {
+  /// Shadowsocks has no default port, so one has to be written.
+  NoPort
+  PortNotANumber
+  PortOutOfRange
+  NoHost
+  HostTooLong
+  MalformedIpv6
+  MalformedHost
 }
 
 // --- reading ------------------------------------------------------------------
@@ -122,12 +152,32 @@ pub fn parse(text: String) -> Result(Config, UrlError) {
     method.from_string(name) |> result.map_error(UnsupportedMethod),
   )
   use where <- result.try(
-    address.parse(authority) |> result.map_error(BadServer),
+    address.parse(authority)
+    |> result.map_error(fn(reason) { BadServer(server_problem(reason)) }),
   )
   use tag <- result.try(percent_decoded(fragment, Tag))
   use plugin <- result.try(plugin_of(query))
 
   Ok(Config(chosen, password, where, tag, plugin))
+}
+
+/// Keep the kind and drop the text.
+///
+/// `address.AddressError` quotes what it was given, which is right for a module
+/// whose input is an address. Here the same string may be the tail of a
+/// password, so only the shape of the problem survives the crossing.
+fn server_problem(reason: address.AddressError) -> ServerProblem {
+  case reason {
+    address.MissingPort(_) -> NoPort
+    address.MalformedPort(_) -> PortNotANumber
+    address.PortOutOfRange(_) -> PortOutOfRange
+    address.EmptyDomain -> NoHost
+    address.DomainTooLong(_) -> HostTooLong
+    address.MalformedIpv6(_) -> MalformedIpv6
+    address.OctetOutOfRange(_) -> MalformedHost
+    address.GroupOutOfRange(_) -> MalformedHost
+    address.WrongGroupCount(_) -> MalformedHost
+  }
 }
 
 fn after_scheme(text: String) -> Result(String, UrlError) {
@@ -390,23 +440,20 @@ pub fn explain(reason: UrlError) -> String {
       <> "either written out or base64 encoded; the base64 here either does "
       <> "not decode, is not text, or has no colon in it."
     UnsupportedMethod(reason) -> method.explain(reason)
-    BadServer(reason) ->
-      "the server address could not be read: "
-      <> case reason {
-        address.MissingPort(_) ->
-          "there is no port. Shadowsocks has no default port, so one has to be "
-          <> "written."
-        address.PortOutOfRange(port) ->
-          "the port " <> int.to_string(port) <> " is not in 0-65535."
-        address.MalformedPort(_) -> "the port is not a number."
-        address.MalformedIpv6(_) -> "the IPv6 address is not well formed."
-        address.EmptyDomain -> "there is no host."
-        address.DomainTooLong(bytes) ->
-          "the host name is "
-          <> int.to_string(bytes)
-          <> " bytes, and 255 is the "
-          <> "most that fits in the protocol."
-        other -> string.inspect(other)
+    BadServer(problem) ->
+      "the part after the @ could not be read as a host and port: "
+      <> case problem {
+        NoPort ->
+          "there is no port. Shadowsocks has no default port, so one has to "
+          <> "be written. If the password contains an @, note that the host "
+          <> "is read from after the last one."
+        PortNotANumber -> "the port is not a number."
+        PortOutOfRange -> "the port is not in 0-65535."
+        NoHost -> "there is no host."
+        HostTooLong ->
+          "the host name is longer than the 255 bytes that fit in the protocol."
+        MalformedIpv6 -> "the bracketed IPv6 address is not well formed."
+        MalformedHost -> "the host is not well formed."
       }
     MalformedEscape(Password) ->
       "the password contains a percent escape that is not valid."
