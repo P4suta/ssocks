@@ -84,7 +84,7 @@ pub fn a_datagram_reaches_a_target_and_the_reply_comes_back_test() {
   assert round_trip(client(), relaying, target_at(echoing), <<"ping":utf8>>)
     == Ok(#(target_at(echoing), <<"ping":utf8>>))
 
-  udp.stop(relaying)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 pub fn each_client_gets_its_own_replies_test() {
@@ -102,8 +102,8 @@ pub fn each_client_gets_its_own_replies_test() {
   assert round_trip(second, relaying, target_at(echoing), <<"second":utf8>>)
     == Ok(#(target_at(echoing), <<"second":utf8>>))
 
-  assert udp.sessions(relaying, within: 1000) == 2
-  udp.stop(relaying)
+  assert udp.sessions(relaying, within: 1000) == Ok(2)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 pub fn one_client_sending_twice_keeps_one_session_test() {
@@ -116,8 +116,8 @@ pub fn one_client_sending_twice_keeps_one_session_test() {
   let assert Ok(_) =
     round_trip(socket, relaying, target_at(echoing), <<"two":utf8>>)
 
-  assert udp.sessions(relaying, within: 1000) == 1
-  udp.stop(relaying)
+  assert udp.sessions(relaying, within: 1000) == Ok(1)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 pub fn a_large_payload_survives_the_relay_test() {
@@ -130,7 +130,7 @@ pub fn a_large_payload_survives_the_relay_test() {
   assert round_trip(client(), relaying, target_at(echoing), payload)
     == Ok(#(target_at(echoing), payload))
 
-  udp.stop(relaying)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 // --- refusing -----------------------------------------------------------------
@@ -151,7 +151,7 @@ pub fn a_packet_that_does_not_authenticate_is_dropped_in_silence_test() {
   assert toss.receive(socket, max_length: 65_535, timeout_milliseconds: 300)
     == Error(toss.Timeout)
 
-  udp.stop(relaying)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 pub fn a_replayed_packet_is_refused_test() {
@@ -167,11 +167,17 @@ pub fn a_replayed_packet_is_refused_test() {
   let assert Ok(udp.SessionOpened(_)) = process.receive(watched, 2000)
   let assert Ok(udp.Forwarded(_, _)) = process.receive(watched, 2000)
 
+  // The echo answers the first packet, and that answer is an event too. Waiting
+  // for it here rather than letting it race the next assertion: without this
+  // the test asks for the rejection and is handed the reply to the packet
+  // before it, which is a failure that says nothing about replay.
+  let assert Ok(udp.Returned(_, _)) = process.receive(watched, 2000)
+
   let assert Ok(_) =
     toss.send_to(socket, loopback(), udp.port(relaying), packet)
   let assert Ok(udp.Rejected(udp.Replayed(_))) = process.receive(watched, 2000)
 
-  udp.stop(relaying)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 pub fn a_relay_and_a_server_can_share_one_replay_filter_test() {
@@ -191,7 +197,7 @@ pub fn a_relay_and_a_server_can_share_one_replay_filter_test() {
     toss.send_to(client(), loopback(), udp.port(relaying), packet)
   let assert Ok(udp.Rejected(udp.Replayed(_))) = process.receive(watched, 2000)
 
-  udp.stop(relaying)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 // --- the table ----------------------------------------------------------------
@@ -209,13 +215,13 @@ pub fn a_quiet_session_is_swept_test() {
 
   let assert Ok(_) =
     round_trip(client(), relaying, target_at(echoing), <<"then quiet":utf8>>)
-  assert udp.sessions(relaying, within: 1000) == 1
+  assert udp.sessions(relaying, within: 1000) == Ok(1)
 
   let assert Ok(udp.SessionExpired(remaining)) = wait_for_expiry(watched)
   assert remaining == 0
-  assert udp.sessions(relaying, within: 1000) == 0
+  assert udp.sessions(relaying, within: 1000) == Ok(0)
 
-  udp.stop(relaying)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 pub fn the_table_has_a_ceiling_test() {
@@ -231,8 +237,8 @@ pub fn the_table_has_a_ceiling_test() {
   let assert Ok(_) =
     round_trip(client(), relaying, target_at(echoing), <<"c":utf8>>)
 
-  assert udp.sessions(relaying, within: 1000) == 2
-  udp.stop(relaying)
+  assert udp.sessions(relaying, within: 1000) == Ok(2)
+  let assert Ok(Nil) = udp.stop(relaying)
 }
 
 // --- helpers ------------------------------------------------------------------
@@ -243,6 +249,39 @@ fn wait_for_expiry(watched: Subject(udp.Event)) -> Result(udp.Event, Nil) {
     Ok(_) -> wait_for_expiry(watched)
     Error(Nil) -> Error(Nil)
   }
+}
+
+// --- stopping -----------------------------------------------------------------
+
+pub fn asking_a_relay_that_has_stopped_is_an_error_not_a_crash_test() {
+  let #(relaying, _) = start(plain)
+  assert udp.sessions(relaying, within: 1000) == Ok(0)
+
+  let assert Ok(Nil) = udp.stop(relaying)
+
+  // Two claims at once. That the answer is an error rather than an exception:
+  // a caller polling a relay for its size should not be brought down by the
+  // relay going away. And that this is not a race: `stop` waits for the relay
+  // to be gone, so by the time it returns there is nothing left to answer.
+  assert udp.sessions(relaying, within: 1000) == Error(Nil)
+}
+
+pub fn the_port_is_free_once_stop_returns_test() {
+  let #(relaying, _) = start(plain)
+  let port = udp.port(relaying)
+
+  let assert Ok(Nil) = udp.stop(relaying)
+
+  // The practical reason `stop` waits. A relay's socket is closed by the
+  // runtime when its process ends, so a stop that returned early would leave a
+  // window in which the port is still taken and this rebind would fail.
+  let assert Ok(second) =
+    udp.relay(session())
+    |> udp.bind("127.0.0.1")
+    |> udp.start(port)
+
+  assert udp.port(second) == port
+  let assert Ok(Nil) = udp.stop(second)
 }
 
 fn filler(size: Int) -> BitArray {

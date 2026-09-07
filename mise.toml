@@ -193,6 +193,10 @@ run = [
   "gleam run -m environment_smoke --target javascript --runtime bun",
 ]
 
+[tasks."interop-fetch"]
+description = "Download the pinned shadowsocks-rust the interop tests need; the only task that uses the network"
+run = "node scripts/fetch-ssrust.mjs"
+
 [tasks.interop]
 description = "Against real shadowsocks-rust; the only tests that prove this is Shadowsocks"
 run = [

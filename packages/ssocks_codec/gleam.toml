@@ -10,7 +10,7 @@ internal_modules = ["ssocks/internal/*"]
 
 description = "Sans-IO Shadowsocks AEAD codec for Gleam, running on Erlang and Node-family JavaScript"
 licences = ["MIT", "Apache-2.0"]
-repository = { type = "github", user = "P4suta", repo = "shadowsocks" }
+repository = { type = "github", user = "P4suta", repo = "ssocks" }
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"

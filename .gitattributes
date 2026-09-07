@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Line endings are content here, not presentation.
+#
+# `gleam format --check` compares bytes, so a checkout that rewrote LF to CRLF
+# reports every file in the repository as misformatted. That is what Windows
+# runners do by default, and it is what happened the first time this repository
+# ran CI at all: one job failed with a list of every source file in it, which
+# reads like a catastrophe and is a checkout setting.
+#
+# Normalising here rather than asking each contributor and each runner to set
+# core.autocrlf keeps the formatter's answer the same everywhere.
+* text=auto eol=lf
