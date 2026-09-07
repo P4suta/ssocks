@@ -48,6 +48,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import glip
 import ssocks/address.{type Address}
@@ -211,14 +212,58 @@ pub fn port(relaying: Relay) -> Int {
 }
 
 /// How many client associations exist right now.
-pub fn sessions(relaying: Relay, within timeout: Int) -> Int {
-  process.call(relaying.control, timeout, Sessions)
+///
+/// `Error(Nil)` means there was nobody to answer: the relay was stopped, or it
+/// went down, or it did not reply inside the timeout. Asking is the sort of
+/// thing a caller does on a timer to draw a graph, and a caller on a timer
+/// should not be brought down by the relay it is watching going away.
+pub fn sessions(relaying: Relay, within timeout: Int) -> Result(Int, Nil) {
+  use running <- result.try(process.subject_owner(relaying.control))
+
+  let reply = process.new_subject()
+  let watching = process.monitor(running)
+  process.send(relaying.control, Sessions(reply))
+
+  // Monitoring rather than checking first: a relay that is alive when asked
+  // can be gone before it answers, and a bare receive would then wait out the
+  // whole timeout for a message that is never coming.
+  let answer =
+    process.new_selector()
+    |> process.select_map(reply, Ok)
+    |> process.select_specific_monitor(watching, fn(_) { Error(Nil) })
+    |> process.selector_receive(timeout)
+
+  process.demonitor_process(watching)
+  result.flatten(answer)
 }
 
 /// Stop listening and drop every association.
+///
+/// Waits for the relay to be gone before returning. A relay's sockets are
+/// closed as it ends, so a `stop` that returned first would leave a window in
+/// which the port is still taken by a relay that has been told to stop —
+/// which is exactly when a caller rebinds it.
 pub fn stop(relaying: Relay) -> Nil {
-  process.send(relaying.control, Stop)
+  case process.subject_owner(relaying.control) {
+    Error(Nil) -> Nil
+    Ok(running) -> {
+      let watching = process.monitor(running)
+      process.send(relaying.control, Stop)
+
+      let _ =
+        process.new_selector()
+        |> process.select_specific_monitor(watching, fn(_) { Nil })
+        |> process.selector_receive(stop_timeout)
+
+      process.demonitor_process(watching)
+      Nil
+    }
+  }
 }
+
+/// Long enough for a full table's worth of sockets to close, short enough that
+/// a relay which is never going to answer does not hold up the caller.
+const stop_timeout = 5000
 
 // --- the relay process --------------------------------------------------------
 
