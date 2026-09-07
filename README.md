@@ -241,6 +241,22 @@ cannot back a synchronous `BitArray -> BitArray` codec.
 - **Shadowsocks 2022 (SIP022)**, for now. It derives session keys with BLAKE3,
   which the Erlang crypto application does not provide.
 
+## Diagnosis
+
+Protocol bugs are silent: one symptom, many causes, none distinguishable from
+the outside. [docs/debugging.md](docs/debugging.md) is the order to look in.
+
+`ssocks/inspect` walks a stream the way the decoder does and prints every field
+with its offset, its length and the nonce it was decrypted under, so that a
+mismatch with another implementation is a minute of reading two dumps rather
+than a day of guessing.
+
+`ssocks/testing` is public on purpose. The hard part of an incremental decoder
+is not the decoder, it is the loop around it, and that code lives in the caller
+and breaks only against real networks. The generators this library tests itself
+with — every split, one byte at a time, every corruption, every truncation —
+are exported so a caller can point them at their own loop.
+
 ## Interoperability
 
 Almost every test in this repository compares this implementation with itself,
