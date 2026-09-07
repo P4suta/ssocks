@@ -36,7 +36,37 @@ What works today:
 | TCP | framing, in both directions, incremental |
 | UDP | packet format |
 | Addresses | IPv4, IPv6 and domain names, wire and text |
-| Not yet | the client, the server, the UDP relay, `ss://` URLs |
+| URLs | `ss://` in all three forms, read and written |
+| Not yet | the client, the server, the UDP relay |
+
+## The URL your provider gave you
+
+Configuration usually arrives as one line, pasted from a web page or scanned
+from a QR code. Three forms of that line are in circulation and all three are
+read here, because a library that handles two of them fails for a third of its
+users:
+
+```gleam
+import ssocks/url
+
+let assert Ok(config) =
+  url.parse("ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388#Tokyo")
+
+url.method(config)  // Aes256Gcm
+url.server(config)  // example.com:8388
+url.tag(config)     // Some("Tokyo")
+url.key(config)     // ready for stream.encoder
+```
+
+`?plugin=` and `#tag` are kept, so a URL survives a round trip through this
+module rather than losing a field somebody downstream needs. Refusals name what
+was wrong — an unauthenticated cipher says which cipher and why, rather than
+"invalid URL".
+
+None of those refusals quote the input. A parse failure is exactly when a
+caller reaches for the text to print it, and the text is a credential; use
+`url.redacted` to print a configuration, and `url.to_string` only where a
+credential is what you meant.
 
 ## The incremental decoder
 

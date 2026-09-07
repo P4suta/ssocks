@@ -37,7 +37,12 @@ pub type KeyError {
   /// The method fixes the key length, and this was not it. Both numbers are
   /// named so the reader is not left counting bytes.
   WrongKeyLength(expected: Int, actual: Int)
-  MalformedBase64(text: String)
+  /// Text that is not base64 in either alphabet.
+  ///
+  /// Deliberately empty. What was handed in is key material, and an error
+  /// that quoted it would put a key wherever the error is printed. The caller
+  /// still has the input it passed.
+  MalformedBase64
 }
 
 /// Derive a key from a password, the way the deployed protocol does.
@@ -76,7 +81,7 @@ pub fn from_base64(
 ) -> Result(Key, KeyError) {
   use decoded <- result.try(
     decode_either_alphabet(encoded)
-    |> result.replace_error(MalformedBase64(encoded)),
+    |> result.replace_error(MalformedBase64),
   )
   from_bytes(chosen_method, decoded)
 }

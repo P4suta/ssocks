@@ -8,13 +8,14 @@
 //// acceptable answers are `Ok` and `Error`. A panic in a decoder is a denial of
 //// service, because the bytes that trigger it come from whoever is connecting.
 ////
-//// Three shapes of input are used, because random noise alone is a weak fuzzer
+//// Four shapes of input are used, because random noise alone is a weak fuzzer
 //// against a format with a salt at the front: noise never gets past the first
 //// authentication, so it never exercises the framing at all.
 ////
 ////   - noise, which tests the outermost checks
 ////   - valid streams with one byte changed, which reach the AEAD
 ////   - valid streams truncated anywhere, which reach the starvation paths
+////   - valid ss:// URLs with one character replaced, which reach the parser
 ////
 //// The generator is a Lehmer sequence rather than the platform's, so a seed
 //// reproduces a run exactly on Erlang and on every JavaScript runtime.
@@ -33,6 +34,7 @@ import ssocks/datagram
 import ssocks/key
 import ssocks/method
 import ssocks/stream
+import ssocks/url
 
 pub fn main() -> Nil {
   case argv.load().arguments {
@@ -50,6 +52,7 @@ pub fn main() -> Nil {
         noise(rounds, normalise_seed(seed), 0)
         + corruptions(rounds, normalise_seed(seed + 1), 0)
         + truncations(rounds, normalise_seed(seed + 2), 0)
+        + urls(rounds, normalise_seed(seed + 3), 0)
 
       io.println(
         "fuzz_smoke: "
@@ -81,7 +84,7 @@ fn healthy_stream() -> BitArray {
   bit_array.concat([salt, framed])
 }
 
-// --- the three shapes ---------------------------------------------------------
+// --- the four shapes ---------------------------------------------------------
 
 fn noise(remaining: Int, state: Int, done: Int) -> Int {
   case remaining {
@@ -122,6 +125,55 @@ fn truncations(remaining: Int, state: Int, done: Int) -> Int {
   }
 }
 
+/// A valid URL with one character replaced by another.
+///
+/// `url.parse` does not read bytes off a network, so it is not in `exercise`,
+/// but it does read text a user pasted from somewhere. Random bytes are almost
+/// never valid UTF-8 and so almost never reach it; corrupting a real URL keeps
+/// the input plausible enough to get past the first few cuts and into the
+/// base64, the percent escapes and the address.
+fn urls(remaining: Int, state: Int, done: Int) -> Int {
+  case remaining {
+    0 -> done
+    _ -> {
+      let whole = healthy_url()
+      let size = string.length(whole)
+      let #(at, state) = between(state, 0, size - 1)
+      let #(choice, state) = between(state, 0, list.length(url_alphabet) - 1)
+      let _ = url.parse(replace_at(whole, at, pick(url_alphabet, choice)))
+      urls(remaining - 1, state, done + 1)
+    }
+  }
+}
+
+fn healthy_url() -> String {
+  "ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388/?plugin=obfs-local%3Bx#Tag"
+}
+
+/// The characters that mean something in a URL, so a corruption lands on a
+/// separator rather than on a letter most of the time.
+const url_alphabet = [
+  ":", "@", "#", "?", "&", "=", "/", "%", "+", ";", "[", "]", ".", "-", "s", "1",
+  "東",
+]
+
+fn pick(from: List(String), index: Int) -> String {
+  case from {
+    [] -> "?"
+    [first, ..rest] ->
+      case index {
+        0 -> first
+        _ -> pick(rest, index - 1)
+      }
+  }
+}
+
+fn replace_at(text: String, at: Int, with: String) -> String {
+  string.slice(text, 0, at)
+  <> with
+  <> string.slice(text, at + 1, string.length(text) - at - 1)
+}
+
 /// Every decoder that takes bytes off a network, on one input.
 ///
 /// The results are deliberately discarded. The assertion is that control
@@ -132,6 +184,16 @@ fn exercise(input: BitArray) -> Nil {
   let _ = datagram.open(session_key(), input)
   let _ = datagram.salt_of(session_key(), input)
   let _ = address.decode(input)
+  // Text inputs also reach the URL parser, on the rare occasion that random
+  // bytes happen to be valid UTF-8.
+  let _ = case bit_array.to_string(input) {
+    Ok(text) -> {
+      let _ = url.parse(text)
+      let _ = url.parse("ss://" <> text)
+      Nil
+    }
+    Error(Nil) -> Nil
+  }
   Nil
 }
 

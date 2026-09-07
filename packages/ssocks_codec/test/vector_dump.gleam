@@ -16,6 +16,7 @@
 import gleam/bit_array
 import gleam/io
 import gleam/list
+import gleam/option.{Some}
 import ssocks/address
 import ssocks/cipher/chacha20
 import ssocks/cipher/poly1305
@@ -27,6 +28,7 @@ import ssocks/key
 import ssocks/method
 import ssocks/nonce
 import ssocks/stream
+import ssocks/url
 
 pub fn main() -> Nil {
   let key32 =
@@ -36,6 +38,8 @@ pub fn main() -> Nil {
   let salt32 =
     bytes("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
   let salt16 = bytes("0102030405060708090a0b0c0d0e0f10")
+
+  urls(salt32)
 
   line("kdf.extract", kdf.extract(salt32, key32))
   line("kdf.expand", kdf.expand(key32, <<"ss-subkey":utf8>>, 32))
@@ -88,6 +92,48 @@ pub fn main() -> Nil {
   line(name <> ".datagram", packet)
 
   line(name <> ".nonce.257", advance(nonce.zero(), 257) |> nonce.to_bytes)
+}
+
+/// The `ss://` layer, which is the only one here made of text.
+///
+/// Everything above this point is bytes in and bytes out, where the targets
+/// agree because they are told to. Percent coding, base64 and UTF-8 are where
+/// a runtime gets to have an opinion, so the results are printed as the hex of
+/// their UTF-8 bytes: two runtimes that disagree about how a codepoint is
+/// spelled disagree here, visibly, rather than in a URL that one of them hands
+/// to a server which then refuses it.
+fn urls(salt: BitArray) -> Nil {
+  let assert Ok(parsed) =
+    url.parse("ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388#Tokyo")
+  line("url.parsed.server", address.encode(url.server(parsed)))
+  line("url.parsed.subkey", key.derive_subkey(url.key(parsed), salt))
+
+  let assert Ok(legacy) =
+    url.parse(
+      "ss://"
+      <> bit_array.base64_url_encode(
+        <<"chacha20-ietf-poly1305:passwd@[2001:db8::1]:8388":utf8>>,
+        False,
+      ),
+    )
+  line("url.legacy.server", address.encode(url.server(legacy)))
+  line("url.legacy.subkey", key.derive_subkey(url.key(legacy), salt))
+
+  let assert Ok(where) = address.parse("example.com:8388")
+  let built =
+    url.new(method.ChaCha20Poly1305, "p@ss:w#rd?&=/ %+é パスワード", where)
+    |> url.with_tag("東京 / #1")
+    |> url.with_plugin(url.Plugin("v2ray-plugin", Some("mode=quic;host=a.b")))
+
+  text("url.to_string", url.to_string(built))
+  text("url.redacted", url.redacted(built))
+
+  let assert Ok(again) = url.parse(url.to_string(built))
+  text("url.round_trip", url.to_string(again))
+}
+
+fn text(label: String, value: String) -> Nil {
+  line(label, <<value:utf8>>)
 }
 
 fn line(label: String, value: BitArray) -> Nil {

@@ -138,7 +138,7 @@ pub fn unpadded_base64_is_accepted_test() {
 
 pub fn text_that_is_not_base64_is_refused_test() {
   assert key.from_base64(method.Aes256Gcm, "not base64!!")
-    == Error(key.MalformedBase64("not base64!!"))
+    == Error(key.MalformedBase64)
 }
 
 pub fn base64_that_decodes_to_the_wrong_length_is_refused_test() {
@@ -220,4 +220,15 @@ fn filler(size: Int) -> BitArray {
 
 fn other_filler(size: Int) -> BitArray {
   <<0x42:8>> |> list.repeat(size) |> bit_array.concat
+}
+
+pub fn a_refused_key_does_not_come_back_inside_the_error_test() {
+  // What `from_base64` is handed is key material. An error that quotes it puts
+  // a key into whatever prints that error, which is the single thing this
+  // module exists to prevent. The caller already has the input; an error does
+  // not need to hand it back.
+  let secret = "correct-horse-battery-staple-not-base64!!"
+  let assert Error(reason) = key.from_base64(method.Aes256Gcm, secret)
+
+  assert !string.contains(string.inspect(reason), "correct-horse")
 }
