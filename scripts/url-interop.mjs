@@ -24,16 +24,16 @@
 // Only an implementation that had no part in writing this can tell those apart,
 // and it should see what each target actually produces.
 //
-// Point SSOCKS_SSRUST_DIR at a directory holding ssurl. Nothing is downloaded
-// here; the binaries stay outside the repository.
+// `mise run interop-fetch` puts a SHA-256 pinned shadowsocks-rust outside the
+// repository and this finds it there; SSOCKS_SSRUST_DIR overrides where it
+// looks. Nothing is downloaded from here.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { quoted } from "./shell.mjs";
-
-const WINDOWS = process.platform === "win32";
+import { locate } from "./ssrust.mjs";
 
 const TARGETS = [
   { name: "erlang", flags: ["--target", "erlang"] },
@@ -46,16 +46,7 @@ function fail(message) {
 }
 
 function urlTool() {
-  const directory = process.env.SSOCKS_SSRUST_DIR;
-  if (!directory) {
-    fail(
-      "SSOCKS_SSRUST_DIR is not set. Point it at a directory containing ssurl\n" +
-        "from https://github.com/shadowsocks/shadowsocks-rust/releases .",
-    );
-  }
-  const binary = join(directory, WINDOWS ? "ssurl.exe" : "ssurl");
-  if (!existsSync(binary)) fail(`no ssurl at ${binary}`);
-  return binary;
+  return locate("ssurl", fail);
 }
 
 const SSURL = urlTool();

@@ -13,15 +13,14 @@
 // trip was encrypted, framed, chunked, unchunked and decrypted correctly by two
 // independent implementations.
 //
-// Point SSOCKS_SSRUST_DIR at a directory holding ssserver from
-// https://github.com/shadowsocks/shadowsocks-rust/releases. Nothing is
-// downloaded here; the binaries stay outside the repository.
+// `mise run interop-fetch` puts a SHA-256 pinned shadowsocks-rust outside the
+// repository and this finds it there; SSOCKS_SSRUST_DIR overrides where it
+// looks. Nothing is downloaded from here.
 
 import { createServer, Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { quoted } from "./shell.mjs";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { locate } from "./ssrust.mjs";
 
 const METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
 // Reaches the client through a shell, so it is quoted rather than restricted.
@@ -30,7 +29,6 @@ const METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
 // arguments and every method failed to authenticate — which is indistinguishable
 // from a broken key derivation until you print the command line.
 const PASSWORD = "interop-password-1";
-const WINDOWS = process.platform === "win32";
 
 function fail(message) {
   console.error(`interop: ${message}`);
@@ -38,16 +36,7 @@ function fail(message) {
 }
 
 function serverBinary() {
-  const directory = process.env.SSOCKS_SSRUST_DIR;
-  if (!directory) {
-    fail(
-      "SSOCKS_SSRUST_DIR is not set. Point it at a directory containing ssserver\n" +
-        "from https://github.com/shadowsocks/shadowsocks-rust/releases .",
-    );
-  }
-  const binary = join(directory, WINDOWS ? "ssserver.exe" : "ssserver");
-  if (!existsSync(binary)) fail(`no ssserver at ${binary}`);
-  return binary;
+  return locate("ssserver", fail);
 }
 
 /// A TCP echo server. Whatever the Shadowsocks server relays to it comes back

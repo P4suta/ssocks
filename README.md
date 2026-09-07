@@ -294,11 +294,26 @@ rather than merely agreed upon. The cross-runtime comparison already proves
 every runtime computes the same URL bytes, but a shared mistake in percent
 coding would be just as agreed upon and just as unusable.
 
+These four need a real shadowsocks-rust, so they are not part of `mise run
+check` and they need one command first:
+
 ```sh
-SSOCKS_SSRUST_DIR=/path/to/shadowsocks-rust mise run interop
+mise run interop-fetch
 ```
 
-Nothing is downloaded by the build. The binaries stay outside the repository.
+```sh
+mise run interop
+```
+
+`interop-fetch` is the only task in this repository that uses the network. It
+downloads the pinned release, checks it against a SHA-256 recorded per platform
+in `scripts/ssrust.mjs`, and unpacks it into a per-user cache directory —
+outside the checkout, so a third-party binary cannot arrive in a copy or an
+archive of this repository by accident. Nothing else downloads anything: not the
+build, not the tests, and not `mise run interop`, which says to run the fetch
+rather than quietly running it for you.
+
+Already have a copy? Point `SSOCKS_SSRUST_DIR` at it and skip the fetch.
 
 [ssrust]: https://github.com/shadowsocks/shadowsocks-rust/releases
 

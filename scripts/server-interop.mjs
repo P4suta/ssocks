@@ -18,14 +18,14 @@
 // shadowsocks-rust and unframed by this library, which is the direction
 // interop.mjs cannot reach.
 //
-// Point SSOCKS_SSRUST_DIR at a directory holding sslocal. Nothing is downloaded
-// here; the binaries stay outside the repository.
+// `mise run interop-fetch` puts a SHA-256 pinned shadowsocks-rust outside the
+// repository and this finds it there; SSOCKS_SSRUST_DIR overrides where it
+// looks. Nothing is downloaded from here.
 
 import { createServer, Socket } from "node:net";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { quoted } from "./shell.mjs";
+import { locate } from "./ssrust.mjs";
 
 const METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
 const PASSWORD = "server-interop-password-1";
@@ -38,16 +38,7 @@ function fail(message) {
 }
 
 function localBinary() {
-  const directory = process.env.SSOCKS_SSRUST_DIR;
-  if (!directory) {
-    fail(
-      "SSOCKS_SSRUST_DIR is not set. Point it at a directory containing sslocal\n" +
-        "from https://github.com/shadowsocks/shadowsocks-rust/releases .",
-    );
-  }
-  const binary = join(directory, WINDOWS ? "sslocal.exe" : "sslocal");
-  if (!existsSync(binary)) fail(`no sslocal at ${binary}`);
-  return binary;
+  return locate("sslocal", fail);
 }
 
 /// Kill a child and everything it started.

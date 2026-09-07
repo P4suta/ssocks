@@ -76,10 +76,18 @@ The only test that can say "this is Shadowsocks" puts another implementation on
 the other end.
 
 ```sh
-SSOCKS_SSRUST_DIR=/path/to/shadowsocks-rust mise run interop
+mise run interop-fetch
 ```
 
-Four of them run: this client against a real `ssserver`, a real `sslocal` against
+```sh
+mise run interop
+```
+
+The first is needed once. It downloads the pinned shadowsocks-rust, checks its
+SHA-256, and puts it outside the repository; `SSOCKS_SSRUST_DIR` points at a
+copy you already have instead. The second downloads nothing.
+
+Four tests run: this client against a real `ssserver`, a real `sslocal` against
 this server, a real `sslocal -u` against this UDP relay, and `ssurl` reading and
 writing `ss://` both ways. If your change broke the wire format, one of them
 says so and says which layer.

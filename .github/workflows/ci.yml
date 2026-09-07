@@ -60,9 +60,6 @@ jobs:
     # self-consistent, so it runs against a pinned real implementation.
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      SSRUST_VERSION: v1.25.0
-      SSOCKS_SSRUST_DIR: ${{ github.workspace }}/.ssrust
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -70,17 +67,12 @@ jobs:
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
         with:
           experimental: true
-      - name: Fetch shadowsocks-rust
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "$SSOCKS_SSRUST_DIR"
-          cd "$SSOCKS_SSRUST_DIR"
-          gh release download "$SSRUST_VERSION" \
-            --repo shadowsocks/shadowsocks-rust \
-            --pattern 'shadowsocks-*.x86_64-unknown-linux-gnu.tar.xz*'
-          sha256sum --check --ignore-missing ./*.sha256
-          tar -xf ./*.tar.xz
+      # The same command a person runs locally, so CI cannot verify the
+      # download differently from the way the README says it is verified.
+      # The digest lives in scripts/ssrust.mjs: one fetched from the release
+      # alongside the asset would move whenever the asset moved, and check
+      # only that the transfer was not corrupted.
+      - run: mise run interop-fetch
       - run: mise run deps
       - run: mise run interop
 
