@@ -243,20 +243,26 @@ pub fn sessions(relaying: Relay, within timeout: Int) -> Result(Int, Nil) {
 /// closed as it ends, so a `stop` that returned first would leave a window in
 /// which the port is still taken by a relay that has been told to stop —
 /// which is exactly when a caller rebinds it.
-pub fn stop(relaying: Relay) -> Nil {
+///
+/// `Error(Nil)` means that did not happen inside `stop_timeout` and the relay
+/// is still there, holding its port. The waiting is the whole point of this
+/// function, so returning `Ok` when the wait ran out would be a promise about
+/// the port that it cannot keep.
+pub fn stop(relaying: Relay) -> Result(Nil, Nil) {
   case process.subject_owner(relaying.control) {
-    Error(Nil) -> Nil
+    // Nothing to wait for; being gone is what was asked for.
+    Error(Nil) -> Ok(Nil)
     Ok(running) -> {
       let watching = process.monitor(running)
       process.send(relaying.control, Stop)
 
-      let _ =
+      let stopped =
         process.new_selector()
         |> process.select_specific_monitor(watching, fn(_) { Nil })
         |> process.selector_receive(stop_timeout)
 
       process.demonitor_process(watching)
-      Nil
+      stopped
     }
   }
 }

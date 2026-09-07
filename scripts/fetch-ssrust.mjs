@@ -106,6 +106,12 @@ say("`mise run interop` will find it there; SSOCKS_SSRUST_DIR overrides.");
 
 /// Windows ships the release as a zip and everything else as a tar.xz, so the
 /// two platforms need different tools rather than one with a flag.
+///
+/// The PowerShell command is a constant, and the two paths reach it through the
+/// environment. Interpolating them into the command text instead would break on
+/// any path holding a single quote — `C:\Users\O'Brien\...` is an ordinary
+/// Windows path — and what follows a quote that closes a string early is not a
+/// broken path but a second PowerShell statement.
 function unpack(archivePath, into) {
   const run = WINDOWS
     ? spawnSync(
@@ -114,9 +120,13 @@ function unpack(archivePath, into) {
           "-NoProfile",
           "-NonInteractive",
           "-Command",
-          `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${into}' -Force`,
+          "Expand-Archive -LiteralPath $env:SSOCKS_ARCHIVE" +
+            " -DestinationPath $env:SSOCKS_INTO -Force",
         ],
-        { stdio: "inherit" },
+        {
+          stdio: "inherit",
+          env: { ...process.env, SSOCKS_ARCHIVE: archivePath, SSOCKS_INTO: into },
+        },
       )
     : spawnSync("tar", ["-xJf", archivePath, "-C", into], { stdio: "inherit" });
 
