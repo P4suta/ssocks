@@ -11,6 +11,12 @@
 //// decrypted here. Nothing about that round trip can succeed by shared
 //// misunderstanding.
 ////
+//// It goes through `ssocks/client` rather than through the codec directly, so
+//// the thing being checked against a real server is the thing a caller
+//// actually uses — including the decision to hold the target address header
+//// back until the first payload, which only a foreign server can confirm is
+//// read the way this expects.
+////
 //// Driven by `scripts/interop.mjs`, which starts the echo server and the
 //// Shadowsocks server and passes their ports in. Run it with `mise run interop`.
 
@@ -24,11 +30,11 @@ import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
-import mug
+import ssocks
 import ssocks/address
-import ssocks/key
+import ssocks/client
 import ssocks/method
-import ssocks/stream
+import ssocks/url
 
 pub fn main() -> Nil {
   case argv.load().arguments {
@@ -54,9 +60,10 @@ fn run(
   chosen: method.Method,
   password: String,
 ) -> Nil {
-  let session_key = key.from_password(chosen, password)
-  let assert Ok(target) =
-    address.parse("127.0.0.1:" <> int.to_string(echo_port))
+  let assert Ok(server) =
+    address.parse("127.0.0.1:" <> int.to_string(server_port))
+  let config = url.new(chosen, password, server)
+  let target = "127.0.0.1:" <> int.to_string(echo_port)
 
   // Sizes chosen around the 16383 byte chunk limit. Anything above it must be
   // split by this encoder and reassembled by the other implementation, which is
@@ -65,7 +72,7 @@ fn run(
 
   let failures =
     list.filter_map(sizes, fn(size) {
-      case exchange(session_key, target, server_port, payload_of(size)) {
+      case exchange(config, target, payload_of(size)) {
         Ok(_) -> {
           io.println(
             "  ok   "
@@ -98,39 +105,21 @@ fn run(
 
 /// One request through the Shadowsocks server and back.
 fn exchange(
-  session_key: key.Key,
-  target: address.Address,
-  server_port: Int,
+  config: url.Config,
+  target: String,
   payload: BitArray,
 ) -> Result(Nil, String) {
-  use socket <- result.try(
-    mug.new("127.0.0.1", port: server_port)
-    |> mug.timeout(milliseconds: 5000)
-    |> mug.connect()
-    |> result.map_error(fn(reason) {
-      "could not reach the server: " <> string.inspect(reason)
-    }),
-  )
+  use connection <- with_connection(config, target)
 
-  // A Shadowsocks stream opens with the salt, then the target address followed
-  // immediately by the payload, all inside the framing.
-  let #(encoder, salt) = stream.encoder(session_key)
-  let #(_, framed) =
-    stream.encode(encoder, bit_array.concat([address.encode(target), payload]))
-
-  use _ <- result.try(
-    mug.send(socket, bit_array.concat([salt, framed]))
-    |> result.map_error(fn(reason) { "send failed: " <> string.inspect(reason) }),
+  use connection <- result.try(
+    ssocks.send(connection, payload) |> result.map_error(client.explain),
   )
 
   use echoed <- result.try(collect(
-    socket,
-    stream.decoder(session_key),
+    connection,
     <<>>,
     bit_array.byte_size(payload),
   ))
-
-  let _ = mug.shutdown(socket)
 
   case echoed == payload {
     True -> Ok(Nil)
@@ -144,59 +133,43 @@ fn exchange(
   }
 }
 
-/// Read and decode until the expected number of plaintext bytes has arrived.
+/// `ssocks.with_connection` reports a failed connect in the outer `Result` and
+/// whatever the body produced in the inner one. Both are failures here, so they
+/// are flattened into one.
+fn with_connection(
+  config: url.Config,
+  target: String,
+  run: fn(client.Connection) -> Result(Nil, String),
+) -> Result(Nil, String) {
+  ssocks.with_connection(config, target, 5000, run)
+  |> result.map_error(client.explain)
+  |> result.flatten
+}
+
+/// Read until the expected number of plaintext bytes has arrived.
 fn collect(
-  socket: mug.Socket,
-  decoder: stream.Decoder,
+  connection: client.Connection,
   so_far: BitArray,
   wanted: Int,
 ) -> Result(BitArray, String) {
   case bit_array.byte_size(so_far) >= wanted {
     True -> Ok(so_far)
-    False -> {
-      use received <- result.try(
-        mug.receive(socket, timeout_milliseconds: 5000)
-        |> result.map_error(fn(reason) {
-          "receive failed after "
-          <> int.to_string(bit_array.byte_size(so_far))
-          <> " of "
-          <> int.to_string(wanted)
-          <> " bytes: "
-          <> string.inspect(reason)
-        }),
-      )
-
-      use #(decoder, chunks) <- result.try(
-        stream.decode(decoder, received)
-        |> result.map_error(describe),
-      )
-
-      collect(
-        socket,
-        decoder,
-        bit_array.concat([so_far, bit_array.concat(chunks)]),
-        wanted,
-      )
-    }
-  }
-}
-
-/// Turn a framing failure into the sentence that actually helps.
-fn describe(failure: stream.StreamError) -> String {
-  case failure {
-    stream.AuthenticationFailed(stage:, chunk:, nonce:, buffered:) ->
-      "the reply did not authenticate at "
-      <> string.inspect(stage)
-      <> ", chunk "
-      <> int.to_string(chunk)
-      <> ", nonce "
-      <> string.inspect(nonce)
-      <> ", "
-      <> int.to_string(buffered)
-      <> " bytes buffered. A failure on chunk 0 in the length header usually "
-      <> "means the key or the salt handling disagrees; one further in means "
-      <> "the framing drifted."
-    other -> string.inspect(other)
+    False ->
+      case ssocks.receive(connection, within: 5000) {
+        Error(reason) ->
+          Error(
+            client.explain(reason)
+            <> " (after "
+            <> int.to_string(bit_array.byte_size(so_far))
+            <> " of "
+            <> int.to_string(wanted)
+            <> " bytes, "
+            <> int.to_string(client.chunks_read(connection))
+            <> " chunks read)",
+          )
+        Ok(#(connection, more)) ->
+          collect(connection, bit_array.append(so_far, more), wanted)
+      }
   }
 }
 

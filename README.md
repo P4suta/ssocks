@@ -13,7 +13,8 @@ Two packages, because they can't be one:
 - **`ssocks_codec`** is the protocol with no sockets in it. Ciphers, key
   derivation, the target address header, the TCP framing and the UDP packet, as
   pure functions over bytes. Runs on Erlang and on Node, Deno and Bun.
-- **`ssocks`** is the part that touches the network, on Erlang. In progress.
+- **`ssocks`** is the part that touches the network, on Erlang: the client, and
+  the server.
 
 The split is forced rather than stylistic. `glisten`, `mug` and `toss` are built
 on `gleam_erlang` with no JavaScript implementations, and Gleam refuses to
@@ -37,7 +38,32 @@ What works today:
 | UDP | packet format |
 | Addresses | IPv4, IPv6 and domain names, wire and text |
 | URLs | `ss://` in all three forms, read and written |
-| Not yet | the client, the server, the UDP relay |
+| Client | TCP, over `mug` |
+| Not yet | the server, the UDP relay |
+
+## Three lines
+
+```gleam
+import ssocks
+
+pub fn main() {
+  let assert Ok(config) = ssocks.from_uri("ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388#Tokyo")
+  use connection <- ssocks.with_connection(config, "example.org:443", 5000)
+  let assert Ok(connection) = ssocks.send(connection, <<"GET / HTTP/1.1\r\n\r\n":utf8>>)
+  ssocks.receive(connection, within: 5000)
+}
+```
+
+The salt, the key derivation, the nonce counters, the chunk boundaries and the
+target address header are all below that line.
+
+Two details are worth knowing because they are decisions rather than defaults.
+The target address header is held back until the first `send`, so it travels
+with the payload instead of putting a lone short packet at the start of every
+connection — a fixed-size first packet is a pattern somebody watching can count.
+And `receive` takes the time it may spend in total, not per read: one TCP read
+often completes no chunk, and a per-read timeout would let a peer sending one
+byte at a time hold the connection open indefinitely.
 
 ## The URL your provider gave you
 
