@@ -19,13 +19,16 @@
 
 import { createServer, Socket } from "node:net";
 import { spawn } from "node:child_process";
+import { quoted } from "./shell.mjs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 const METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
-// No spaces: the child is spawned through a shell on Windows, which would
-// split a quoted password into separate arguments. Passwords containing spaces
-// are covered by the unit tests instead.
+// Reaches the client through a shell, so it is quoted rather than restricted.
+// An earlier version of this file relied on the value having no spaces, and
+// when that assumption was first broken the password arrived split across two
+// arguments and every method failed to authenticate — which is indistinguishable
+// from a broken key derivation until you print the command line.
 const PASSWORD = "interop-password-1";
 const WINDOWS = process.platform === "win32";
 
@@ -130,9 +133,13 @@ for (const method of METHODS) {
   // would leave every relayed connection unanswered and the client would time
   // out against a bug in the harness rather than in the codec.
   const status = await new Promise((resolve) => {
+    // Quoted rather than passed as an array: Windows needs a shell to find the
+    // mise-installed `gleam`, and a shell concatenates an argument array
+    // instead of escaping it. That is how the password once arrived at the
+    // client split across two arguments, which looked exactly like a codec
+    // fault until the command line was printed.
     const run = spawn(
-      "gleam",
-      [
+      quoted("gleam", [
         "run",
         "-m",
         "interop_smoke",
@@ -143,8 +150,8 @@ for (const method of METHODS) {
         String(echo.port),
         method,
         PASSWORD,
-      ],
-      { cwd: "packages/ssocks", stdio: "inherit", shell: WINDOWS },
+      ]),
+      { cwd: "packages/ssocks", stdio: "inherit", shell: true },
     );
     run.on("error", (error) => fail(`could not run the client: ${error.message}`));
     run.on("close", resolve);

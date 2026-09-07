@@ -109,16 +109,15 @@ run = [
 [tasks."test-codec"]
 dir = "packages/ssocks_codec"
 run = [
-  "gleam test --target erlang",
-  "gleam test --target javascript --runtime node",
-  "gleam build --target javascript",
-  "node ../../scripts/deno-test.mjs",
-  "gleam test --target javascript --runtime bun",
+  "node ../../scripts/gleam-test.mjs erlang",
+  "node ../../scripts/gleam-test.mjs node",
+  "node ../../scripts/gleam-test.mjs deno",
+  "node ../../scripts/gleam-test.mjs bun",
 ]
 
 [tasks."test-net"]
 dir = "packages/ssocks"
-run = "gleam test --target erlang"
+run = "node ../../scripts/gleam-test.mjs erlang"
 
 [tasks."test-property"]
 description = "Deterministic property run with a fixed seed; reproduce a failure with the same seed"

@@ -20,6 +20,7 @@ import gleam/bit_array
 import gleam/list
 import gleam/option
 import gleam/result
+import gleam/string
 import ssocks/internal/aead
 import ssocks/key
 import ssocks/method
@@ -493,4 +494,29 @@ fn counting_loop(value: Int, acc: List(Int)) -> List(Int) {
     True -> acc
     False -> counting_loop(value - 1, [value, ..acc])
   }
+}
+
+pub fn a_decoder_stops_carrying_the_master_key_once_the_salt_is_consumed_test() {
+  // A decoder lives as long as its connection, and the master key is needed
+  // for exactly one thing: deriving the session subkey from the salt. After
+  // that it is dead weight with a blast radius. `key.gleam` has no byte
+  // accessor precisely so key material cannot spread, and a decoder holding a
+  // copy for the life of a connection would undo that.
+  //
+  // `string.inspect` sees through opaque types, which is the point: this is
+  // what a crash dump, a debug log or an actor's error report would print.
+  let master = list.repeat(<<0xa7>>, 32) |> bit_array.concat
+  let recognisable = "167, 167, 167, 167, 167, 167, 167, 167"
+  let assert Ok(session_key) = key.from_bytes(method.Aes256Gcm, master)
+
+  let fresh = stream.decoder(session_key)
+  assert string.contains(string.inspect(fresh), recognisable)
+
+  // Feed exactly the salt and nothing else.
+  let #(encoder, salt) = stream.encoder(session_key)
+  let #(_, _) = stream.encode(encoder, <<"unused":utf8>>)
+  let assert Ok(#(after_salt, _)) = stream.decode(fresh, salt)
+
+  assert stream.salt(after_salt) == option.Some(salt)
+  assert !string.contains(string.inspect(after_salt), recognisable)
 }

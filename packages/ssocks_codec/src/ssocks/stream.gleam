@@ -37,7 +37,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import ssocks/internal/aead
 import ssocks/key.{type Key}
-import ssocks/method
+import ssocks/method.{type Method}
 import ssocks/nonce.{type Nonce}
 
 /// Bytes in a chunk's length field.
@@ -208,7 +208,7 @@ fn seal(
 /// Reads one direction of a stream, remembering whatever did not complete.
 pub opaque type Decoder {
   Decoder(
-    session_key: Key,
+    method: Method,
     state: State,
     buffer: BitArray,
     salt: Option(BitArray),
@@ -217,7 +217,15 @@ pub opaque type Decoder {
 }
 
 type State {
-  AwaitingSalt
+  /// Carries the master key, because deriving the session subkey from the salt
+  /// is the one thing it is needed for and nothing after the handshake needs it
+  /// again. Keeping it in this variant rather than in the decoder means the
+  /// transition out of it drops the key structurally: past this point there is
+  /// no field left that could hold one.
+  ///
+  /// A decoder lives as long as its connection, so this is the difference
+  /// between key material existing for a handshake and existing for a session.
+  AwaitingSalt(session_key: Key)
   AwaitingLength(subkey: BitArray, counter: Nonce)
   /// The length authenticated but its payload has not all arrived. Holding the
   /// length here is what keeps the nonce from advancing twice for one chunk.
@@ -226,7 +234,7 @@ type State {
 
 /// A decoder positioned at the start of a stream.
 pub fn decoder(session_key: Key) -> Decoder {
-  Decoder(session_key, AwaitingSalt, <<>>, None, 0)
+  Decoder(key.method(session_key), AwaitingSalt(session_key), <<>>, None, 0)
 }
 
 /// The salt this stream opened with, once enough bytes have arrived to know it.
@@ -268,7 +276,7 @@ fn decode_loop(
   produced: List(BitArray),
 ) -> Result(#(Decoder, List(BitArray)), StreamError) {
   case decoder.state {
-    AwaitingSalt -> decode_salt(decoder, produced)
+    AwaitingSalt(session_key) -> decode_salt(decoder, session_key, produced)
     AwaitingLength(subkey, counter) ->
       decode_length(decoder, subkey, counter, produced)
     AwaitingPayload(subkey, counter, length) ->
@@ -278,17 +286,21 @@ fn decode_loop(
 
 fn decode_salt(
   decoder: Decoder,
+  session_key: Key,
   produced: List(BitArray),
 ) -> Result(#(Decoder, List(BitArray)), StreamError) {
-  let size = method.salt_size(key.method(decoder.session_key))
+  let size = method.salt_size(decoder.method)
   case take(decoder.buffer, size) {
     Error(_) -> starved(decoder, produced)
+    // The master key is read here and left behind with the state it arrived
+    // on. Deriving a subkey is its only exit from the key module, and the
+    // subkey that comes back is useless to anyone without this salt.
     Ok(#(salt, rest)) ->
       decode_loop(
         Decoder(
           ..decoder,
           state: AwaitingLength(
-            key.derive_subkey(decoder.session_key, salt),
+            key.derive_subkey(session_key, salt),
             nonce.zero(),
           ),
           buffer: rest,
@@ -370,7 +382,7 @@ fn open(
   tag: BitArray,
 ) -> Result(BitArray, Nil) {
   aead.open(
-    key.method(decoder.session_key),
+    decoder.method,
     subkey,
     nonce.to_bytes(counter),
     <<>>,

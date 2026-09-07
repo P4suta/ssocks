@@ -162,20 +162,26 @@ Individually:
 
 | Task | What it does |
 | --- | --- |
-| `mise run test` | 209 tests, on Erlang and all three JavaScript runtimes |
+| `mise run test` | the unit suite, on Erlang and all three JavaScript runtimes |
 | `mise run test-property` | 6 properties, 10000 cases each, fixed seed |
 | `mise run test-fuzz` | 150000 hostile inputs; a decoder may error but not crash |
 | `mise run test-cross` | every runtime must compute byte-identical output |
 | `mise run interop` | round trip through a real shadowsocks-rust server |
 | `mise run backends` | which cipher backend each runtime selects |
 
-Two of those exist because of gaps rather than preference.
+Several of those exist because of gaps rather than preference.
+
 `gleam build --warnings-as-errors` only covers `src/`, so a warning in a test is
 printed and ignored; `scripts/no-warnings.mjs` closes that, after an integer
 literal above 2^53 silently turned a Poly1305 assertion into a comparison of two
-zeroes. And `gleam test --runtime deno` cannot pass Deno the read permission
-gleeunit needs, so `scripts/deno-test.mjs` runs that leg directly rather than
-letting it quietly not run.
+zeroes.
+
+`gleam test` exits 0 when gleeunit finds no tests at all — it prints
+`No tests found!` and reports success — so a package can pass CI while asserting
+nothing. `scripts/gleam-test.mjs` runs each leg and requires a positive test
+count, which is also where the Deno leg lives: `gleam test --runtime deno`
+cannot pass Deno the read permission gleeunit needs, so that one is built and
+invoked directly rather than left to quietly not run.
 
 [mise]: https://mise.jdx.dev
 

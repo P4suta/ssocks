@@ -14,6 +14,7 @@
 // and refusing any warning covers what the build flag cannot.
 
 import { spawnSync } from "node:child_process";
+import { quoted } from "./shell.mjs";
 
 const targets = process.argv.slice(2);
 if (targets.length === 0) {
@@ -24,9 +25,9 @@ if (targets.length === 0) {
 let failed = false;
 
 for (const target of targets) {
-  const result = spawnSync("gleam", ["check", "--target", target], {
+  const result = spawnSync(quoted("gleam", ["check", "--target", target]), {
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: true,
   });
 
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;

@@ -15,8 +15,7 @@
 // only that something did.
 
 import { spawnSync } from "node:child_process";
-
-const WINDOWS = process.platform === "win32";
+import { quoted } from "./shell.mjs";
 
 const RUNTIMES = [
   { name: "erlang", args: ["--target", "erlang"] },
@@ -37,9 +36,13 @@ function vectorsFrom(output) {
 
 function dump(runtime) {
   const result = spawnSync(
-    "gleam",
-    ["run", "-m", "vector_dump", ...runtime.args],
-    { cwd: "packages/ssocks_codec", encoding: "utf8", shell: WINDOWS, maxBuffer: 64 * 1024 * 1024 },
+    quoted("gleam", ["run", "-m", "vector_dump", ...runtime.args]),
+    {
+      cwd: "packages/ssocks_codec",
+      encoding: "utf8",
+      shell: true,
+      maxBuffer: 64 * 1024 * 1024,
+    },
   );
 
   if (result.status !== 0) {

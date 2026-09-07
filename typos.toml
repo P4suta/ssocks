@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [default]
+# Literal strings, not basic strings. In TOML "\b" is an escape for backspace,
+# so the same pattern in double quotes reaches the regex engine as a control
+# character and matches nothing. That silently did nothing here for a while.
 extend-ignore-re = [
   # Protocol test vectors are hex, and hex is full of runs that read as
   # misspelled words. Anything eight or more hex digits long is data.
-  "\b[0-9a-f]{8,}\b",
+  '\b[0-9a-f]{8,}\b',
+  # Hex split across source lines, where a run starts or ends mid-literal.
+  '"[0-9a-f ]{8,}"',
 ]
-
-[default.extend-words]
-# Belt and braces for the hex above: these appear inside published test
-# vectors, where they are bytes rather than prose.
-ba = "ba"
