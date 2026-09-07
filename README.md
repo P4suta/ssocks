@@ -39,7 +39,8 @@ What works today:
 | Addresses | IPv4, IPv6 and domain names, wire and text |
 | URLs | `ss://` in all three forms, read and written |
 | Client | TCP, over `mug` |
-| Not yet | the server, the UDP relay |
+| Server | TCP, over `glisten`, with replay and anti-probing |
+| Not yet | the UDP relay |
 
 ## Three lines
 
@@ -93,6 +94,41 @@ None of those refusals quote the input. A parse failure is exactly when a
 caller reaches for the text to print it, and the text is a credential; use
 `url.redacted` to print a configuration, and `url.to_string` only where a
 credential is what you meant.
+
+## The server, and not answering
+
+```gleam
+import ssocks/server
+
+let assert Ok(listening) =
+  server.new(key.from_password(method.Aes256Gcm, "hunter2"))
+  |> server.start(8388)
+```
+
+Active probing is how Shadowsocks servers have historically been found. A prober
+opens a connection, sends something that is not a valid handshake, and watches.
+A server that closes immediately, or closes after a distinctive delay, or answers
+at all, has told the prober what it is: a port that behaves differently for
+garbage than an unused port does is a port worth blocking.
+
+So the default is `Drain` — keep the connection open, keep reading, say nothing.
+Three things trigger it, because a prober can produce any of them:
+
+| | |
+| --- | --- |
+| `AuthenticationFailed` | bytes that do not authenticate under this key |
+| `MalformedHeader` | bytes that authenticate and are not a target address |
+| `Silent` | a connection that opens and never handshakes |
+
+A policy covering only the first would still be distinguishable by the other two.
+`server.on_probe` can choose `CloseAfter` or `CloseNow` where concealment
+matters less than idle sockets.
+
+Salts are checked against a replay filter before anything is relayed. The
+specification asks that a salt be unique for the lifetime of a master key, not of
+a transport, so `ssocks/replay_guard` is shareable: one guard across several
+listeners and, later, across UDP. Most implementations skip this — it costs
+memory and does nothing visible when it works.
 
 ## The incremental decoder
 
@@ -183,12 +219,18 @@ in both directions. A reversed nonce counter would be applied the same way when
 writing and when reading, and everything would pass while the library talked to
 nothing in the world.
 
-So two of them put [shadowsocks-rust][ssrust] on the other end.
+So three of them put [shadowsocks-rust][ssrust] on the other end.
 
-For the wire format, a plain TCP echo server sits behind a real `ssserver`, and
-the client asks that server to reach it. All three methods pass at 1, 100,
+For the client, a plain TCP echo server sits behind a real `ssserver`, and this
+library's client asks that server to reach it. All three methods pass at 1, 100,
 16382, 16383, 16384 and 40000 bytes; the last two are the first sizes that force
 a payload across chunk boundaries.
+
+For the server, the arrangement is reversed: a real `sslocal --protocol tunnel`
+sits in front of this library's server. That direction is not implied by the
+first. The client always writes the target address header the same way, so until
+this test existed the server had only ever read headers this library produced —
+never one somebody else wrote, arriving at chunk boundaries it did not choose.
 
 For `ss://`, its `ssurl` decodes URLs written here and this parses URLs written
 by it, field by field, on both targets, including a Japanese password, a tag
