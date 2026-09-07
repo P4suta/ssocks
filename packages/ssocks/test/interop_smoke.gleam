@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 ssocks contributors
-// SPDX-License-Identifier: MIT OR Apache-2.0
-
 //// Talk to a real Shadowsocks server.
 ////
 //// Every other test in this repository compares this implementation against
@@ -16,6 +13,9 @@
 ////
 //// Driven by `scripts/interop.mjs`, which starts the echo server and the
 //// Shadowsocks server and passes their ports in. Run it with `mise run interop`.
+
+// SPDX-FileCopyrightText: 2026 ssocks contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 import argv
 import gleam/bit_array
@@ -68,15 +68,22 @@ fn run(
       case exchange(session_key, target, server_port, payload_of(size)) {
         Ok(_) -> {
           io.println(
-            "  ok   " <> method.to_string(chosen) <> "  " <> int.to_string(size)
+            "  ok   "
+            <> method.to_string(chosen)
+            <> "  "
+            <> int.to_string(size)
             <> " bytes",
           )
           Error(Nil)
         }
         Error(reason) -> {
           io.println(
-            "  FAIL " <> method.to_string(chosen) <> "  " <> int.to_string(size)
-            <> " bytes: " <> reason,
+            "  FAIL "
+            <> method.to_string(chosen)
+            <> "  "
+            <> int.to_string(size)
+            <> " bytes: "
+            <> reason,
           )
           Ok(reason)
         }
@@ -109,10 +116,7 @@ fn exchange(
   // immediately by the payload, all inside the framing.
   let #(encoder, salt) = stream.encoder(session_key)
   let #(_, framed) =
-    stream.encode(
-      encoder,
-      bit_array.concat([address.encode(target), payload]),
-    )
+    stream.encode(encoder, bit_array.concat([address.encode(target), payload]))
 
   use _ <- result.try(
     mug.send(socket, bit_array.concat([salt, framed]))

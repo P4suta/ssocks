@@ -20,3 +20,14 @@ path = ["vectors/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 ssocks contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+[[annotations]]
+# Dependency lock files, written by the Gleam compiler. They carry no comment
+# syntax of their own that survives a regeneration, so they are annotated here.
+path = [
+  "packages/ssocks/manifest.toml",
+  "packages/ssocks_codec/manifest.toml",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 ssocks contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"

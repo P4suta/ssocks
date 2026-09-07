@@ -138,20 +138,9 @@ run = [
 
 [tasks."test-cross"]
 description = "Erlang and JavaScript must produce byte-identical output for every vector"
-dir = "packages/ssocks_codec"
-run = "node ../../scripts/cross-target-vectors.mjs"
+run = "node scripts/cross-target-vectors.mjs"
 
 # --- diagnosis --------------------------------------------------------------
-
-[tasks.cover]
-description = "Erlang line coverage for the codec"
-dir = "packages/ssocks_codec"
-run = "node ../../scripts/coverage.mjs"
-
-[tasks.mutants]
-description = "Mutation testing on the codec, dogfooding gleam_mutants"
-dir = "packages/ssocks_codec"
-run = "gleam run -m gleam_mutants -- run --strict --test-command 'gleam test'"
 
 # --- docs and lint ----------------------------------------------------------
 
@@ -179,7 +168,7 @@ run = [
   "actionlint",
   "yamllint --strict .github lefthook.yml",
   "gitleaks dir . --no-banner --redact --verbose",
-  "uvx --from 'reuse[charset-normalizer]==6.2.0' reuse lint",
+  "uvx --from \"reuse[charset-normalizer]==6.2.0\" reuse lint",
 ]
 
 [tasks.check]

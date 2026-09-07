@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+title = "ssocks"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+The codec tests carry published protocol vectors: RFC 5869 key derivations,
+RFC 8439 ChaCha20 and Poly1305 outputs, and the McGrew and Viega AES-GCM cases.
+They are high entropy hex by construction and every one of them is printed in a
+public specification, so entropy rules match them constantly.
+
+Nothing in this repository is a real credential. Keys used by the tests are
+derived from passwords written in the source beside them, and the interop
+harness generates its own. Should that ever stop being true, the answer is to
+remove the credential rather than to widen this allowlist.
+"""
+paths = [
+  '''packages/ssocks_codec/test/.*\.gleam''',
+  '''packages/ssocks/test/.*\.gleam''',
+]
+
+[[allowlists]]
+description = """
+Compiler output. `gitleaks dir` walks the filesystem rather than the index, so
+it reaches build directories that are not tracked at all. Scanning them finds
+the same test vectors a second time, transpiled.
+"""
+paths = [
+  '''packages/[^/]+/build/.*''',
+]

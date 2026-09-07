@@ -1,0 +1,99 @@
+---
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # Every gate lives in mise.toml so that what CI runs and what a developer
+    # runs cannot drift apart.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
+        with:
+          experimental: true
+      - run: mise run deps
+      - run: mise run fmt
+      - run: mise run build
+      - run: mise run test
+      - run: mise run test-cross
+
+  properties:
+    # Longer randomised runs, on one platform only. The seeds are fixed, so a
+    # failure here reproduces locally with the same command.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
+        with:
+          experimental: true
+      - run: mise run deps
+      - run: mise run test-property
+      - run: mise run test-fuzz
+
+  interop:
+    # The only test that shows this is Shadowsocks rather than merely
+    # self-consistent, so it runs against a pinned real implementation.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SSRUST_VERSION: v1.25.0
+      SSOCKS_SSRUST_DIR: ${{ github.workspace }}/.ssrust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
+        with:
+          experimental: true
+      - name: Fetch shadowsocks-rust
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$SSOCKS_SSRUST_DIR"
+          cd "$SSOCKS_SSRUST_DIR"
+          gh release download "$SSRUST_VERSION" \
+            --repo shadowsocks/shadowsocks-rust \
+            --pattern 'shadowsocks-*.x86_64-unknown-linux-gnu.tar.xz*'
+          sha256sum --check --ignore-missing ./*.sha256
+          tar -xf ./*.tar.xz
+      - run: mise run deps
+      - run: mise run interop
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
+        with:
+          experimental: true
+      - run: mise run deps
+      - run: mise run docs
+      - run: mise run lint
