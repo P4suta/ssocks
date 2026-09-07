@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 ssocks contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Check `ss://` against shadowsocks-rust's own `ssurl`, in both directions.
+// Check `ss://` against shadowsocks-rust's own `ssurl`, in both directions and
+// on both targets.
 //
 // The URL tests in this repository compare this library's parser with this
 // library's writer. That cannot distinguish a correct SIP002 implementation
@@ -16,6 +17,13 @@
 // as `v2ray%2Dplugin` — and a parser that only ever sees its own minimal output
 // would never meet that.
 //
+// Both targets, because this is the only check that says the output is *right*
+// rather than merely agreed upon. `scripts/cross-target-vectors.mjs` already
+// proves every runtime computes the same URL bytes, but a shared mistake in
+// percent coding or base64 would be just as agreed upon and just as unusable.
+// Only an implementation that had no part in writing this can tell those apart,
+// and it should see what each target actually produces.
+//
 // Point SSOCKS_SSRUST_DIR at a directory holding ssurl. Nothing is downloaded
 // here; the binaries stay outside the repository.
 
@@ -26,6 +34,11 @@ import { join } from "node:path";
 import { quoted } from "./shell.mjs";
 
 const WINDOWS = process.platform === "win32";
+
+const TARGETS = [
+  { name: "erlang", flags: ["--target", "erlang"] },
+  { name: "node", flags: ["--target", "javascript", "--runtime", "node"] },
+];
 
 function fail(message) {
   console.error(`url-interop: ${message}`);
@@ -53,19 +66,28 @@ function ssurl(args) {
     shell: true,
   });
   if (result.status !== 0) {
-    fail(`ssurl ${args.join(" ")} failed:\n${result.stdout ?? ""}${result.stderr ?? ""}`);
+    fail(
+      `ssurl ${args.join(" ")} failed:\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+    );
   }
   return (result.stdout ?? "").trim();
 }
 
-function gleam(args) {
+function gleam(target, args) {
   const result = spawnSync(
-    quoted("gleam", ["run", "-m", "url_interop", "--target", "erlang", "--", ...args]),
+    quoted("gleam", [
+      "run",
+      "-m",
+      "url_interop",
+      ...target.flags,
+      "--",
+      ...args,
+    ]),
     { cwd: "packages/ssocks_codec", encoding: "utf8", shell: true },
   );
   const output = `${result.stdout ?? ""}`;
   if (result.status !== 0) {
-    fail(`url_interop ${args[0]} failed:\n${output}${result.stderr ?? ""}`);
+    fail(`url_interop ${args[0]} on ${target.name} failed:\n${output}${result.stderr ?? ""}`);
   }
   // Only the tab-separated lines; the compiler prints its own progress.
   //
@@ -90,41 +112,28 @@ function field(text, name) {
 
 let failures = 0;
 
-function check(label, actual, expected) {
-  if (actual === expected) return true;
+function check(label, ours, theirs) {
+  if (ours === theirs) return true;
   failures += 1;
-  console.error(`  FAIL ${label}\n    ours:  ${JSON.stringify(expected)}\n    ssurl: ${JSON.stringify(actual)}`);
+  console.error(
+    `  FAIL ${label}\n    ours:  ${JSON.stringify(ours)}\n    ssurl: ${JSON.stringify(theirs)}`,
+  );
   return false;
 }
 
-// --- direction one: ssurl reads what we write --------------------------------
+// --- the cases, and what ssurl makes of the same inputs ----------------------
 
-const cases = gleam(["write"]);
-if (cases.length === 0) fail("url_interop write produced no cases");
-
-console.log("url-interop: ssurl decoding URLs written here");
-
-for (const [name, url, host, port, password, method, tag] of cases) {
-  const decoded = ssurl(["--decode", url]);
-  const ok =
-    [
-      check(`${name} host`, field(decoded, "server"), host),
-      check(`${name} port`, field(decoded, "server_port"), port),
-      check(`${name} password`, field(decoded, "password"), password),
-      check(`${name} method`, field(decoded, "method"), method),
-      // ssurl omits remarks entirely when there is no tag.
-      check(`${name} tag`, field(decoded, "remarks"), tag),
-    ].every(Boolean);
-  if (ok) console.log(`  ok   ${name}`);
-}
-
-// --- direction two: we read what ssurl writes --------------------------------
-
-console.log("\nurl-interop: parsing URLs written by ssurl");
+// Written once on the reference target, purely to drive `ssurl --encode`; the
+// per-target checks below re-read the cases from each target in turn.
+const reference = gleam(TARGETS[0], ["write"]);
+if (reference.length === 0) fail("url_interop write produced no cases");
 
 const scratch = mkdtempSync(join(tmpdir(), "ssocks-url-"));
 
-for (const [name, , host, port, password, method, , plugin] of cases) {
+/// One URL per case, written by ssurl rather than by us.
+const theirUrls = new Map();
+
+for (const [name, , host, port, password, method, , plugin] of reference) {
   const config = { server: host, server_port: Number(port), password, method };
   if (plugin) {
     const [pluginName, ...rest] = plugin.split(";");
@@ -134,19 +143,40 @@ for (const [name, , host, port, password, method, , plugin] of cases) {
 
   const path = join(scratch, `${name}.json`);
   writeFileSync(path, JSON.stringify(config), "utf8");
+  theirUrls.set(name, ssurl(["--encode", path]));
+}
 
-  const theirs = ssurl(["--encode", path]);
-  const [parsed] = gleam(["read", theirs, password]);
+// --- both directions, on every target ----------------------------------------
 
-  if (!parsed) {
-    failures += 1;
-    console.error(`  FAIL ${name}: nothing parsed from ${theirs}`);
-    continue;
-  }
+for (const target of TARGETS) {
+  console.log(`\nurl-interop: ${target.name}`);
 
-  const [gotHost, gotPort, gotMethod, , gotPlugin, keys] = parsed;
-  const ok =
-    [
+  const cases = target === TARGETS[0] ? reference : gleam(target, ["write"]);
+
+  for (const [name, ours, host, port, password, method, tag, plugin] of cases) {
+    // Theirs reading ours.
+    const decoded = ssurl(["--decode", ours]);
+    const written = [
+      check(`${name} host`, host, field(decoded, "server")),
+      check(`${name} port`, port, field(decoded, "server_port")),
+      check(`${name} password`, password, field(decoded, "password")),
+      check(`${name} method`, method, field(decoded, "method")),
+      // ssurl omits remarks entirely when there is no tag.
+      check(`${name} tag`, tag, field(decoded, "remarks")),
+    ].every(Boolean);
+
+    // Ours reading theirs.
+    const theirs = theirUrls.get(name);
+    const [parsed] = gleam(target, ["read", theirs, password]);
+
+    if (!parsed) {
+      failures += 1;
+      console.error(`  FAIL ${name}: nothing parsed from ${theirs}`);
+      continue;
+    }
+
+    const [gotHost, gotPort, gotMethod, , gotPlugin, keys] = parsed;
+    const read = [
       check(`${name} host (theirs)`, gotHost, host),
       check(`${name} port (theirs)`, gotPort, port),
       check(`${name} method (theirs)`, gotMethod, method),
@@ -154,7 +184,9 @@ for (const [name, , host, port, password, method, , plugin] of cases) {
       // ssurl drops remarks when encoding, so a tag is not expected back.
       check(`${name} key (theirs)`, keys, "key-matches"),
     ].every(Boolean);
-  if (ok) console.log(`  ok   ${name}`);
+
+    if (written && read) console.log(`  ok   ${name}`);
+  }
 }
 
 if (failures > 0) {

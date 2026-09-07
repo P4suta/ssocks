@@ -165,10 +165,16 @@ the client asks that server to reach it. All three methods pass at 1, 100,
 a payload across chunk boundaries.
 
 For `ss://`, its `ssurl` decodes URLs written here and this parses URLs written
-by it, field by field, including a Japanese password, a tag full of URL syntax
-and an IPv6 server. The second direction earns its keep on its own: `ssurl`
-escapes more than it has to — it writes `v2ray-plugin` as `v2ray%2Dplugin` — and
-a parser that only ever saw its own minimal output would never meet that.
+by it, field by field, on both targets, including a Japanese password, a tag
+full of URL syntax and an IPv6 server. The second direction earns its keep on
+its own: `ssurl` escapes more than it has to — it writes `v2ray-plugin` as
+`v2ray%2Dplugin` — and a parser that only ever saw its own minimal output would
+never meet that.
+
+Both targets, because this is the only check that says the output is *right*
+rather than merely agreed upon. The cross-runtime comparison already proves
+every runtime computes the same URL bytes, but a shared mistake in percent
+coding would be just as agreed upon and just as unusable.
 
 ```sh
 SSOCKS_SSRUST_DIR=/path/to/shadowsocks-rust mise run interop
