@@ -151,13 +151,13 @@ cannot back a synchronous `BitArray -> BitArray` codec.
 
 ## Interoperability
 
-Every test in this repository except one compares this implementation with
-itself, and that cannot distinguish a correct codec from one that is
-consistently wrong in both directions. A reversed nonce counter would be applied
-the same way when writing and when reading, and everything would pass while the
-library talked to nothing in the world.
+Almost every test in this repository compares this implementation with itself,
+and that cannot distinguish a correct codec from one that is consistently wrong
+in both directions. A reversed nonce counter would be applied the same way when
+writing and when reading, and everything would pass while the library talked to
+nothing in the world.
 
-So there are two tests that put [shadowsocks-rust][ssrust] on the other end.
+So two of them put [shadowsocks-rust][ssrust] on the other end.
 
 For the wire format, a plain TCP echo server sits behind a real `ssserver`, and
 the client asks that server to reach it. All three methods pass at 1, 100,
