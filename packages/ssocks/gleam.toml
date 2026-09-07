@@ -20,6 +20,10 @@ ssocks_codec = { path = "../ssocks_codec" }
 glisten = ">= 9.0.0 and < 9.1.0"
 mug = ">= 3.1.0 and < 3.2.0"
 toss = ">= 1.0.0 and < 1.1.0"
+# Direct because the UDP relay names `glip.IpAddress` in its own types: a client
+# address is what the session table is keyed on, and toss reports one with every
+# datagram.
+glip = ">= 1.0.0 and < 1.1.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.9.0 and < 1.12.0"

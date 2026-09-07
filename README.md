@@ -13,8 +13,8 @@ Two packages, because they can't be one:
 - **`ssocks_codec`** is the protocol with no sockets in it. Ciphers, key
   derivation, the target address header, the TCP framing and the UDP packet, as
   pure functions over bytes. Runs on Erlang and on Node, Deno and Bun.
-- **`ssocks`** is the part that touches the network, on Erlang: the client, and
-  the server.
+- **`ssocks`** is the part that touches the network, on Erlang: the client, the
+  server, and the UDP relay.
 
 The split is forced rather than stylistic. `glisten`, `mug` and `toss` are built
 on `gleam_erlang` with no JavaScript implementations, and Gleam refuses to
@@ -34,13 +34,13 @@ What works today:
 | | |
 | --- | --- |
 | Methods | `aes-128-gcm`, `aes-256-gcm`, `chacha20-ietf-poly1305` |
-| TCP | framing, in both directions, incremental |
-| UDP | packet format |
+| TCP framing | in both directions, incremental |
+| UDP packets | seal and open |
 | Addresses | IPv4, IPv6 and domain names, wire and text |
 | URLs | `ss://` in all three forms, read and written |
 | Client | TCP, over `mug` |
 | Server | TCP, over `glisten`, with replay and anti-probing |
-| Not yet | the UDP relay |
+| UDP relay | a NAT table with two limits, over `toss` |
 
 ## Three lines
 
@@ -129,6 +129,36 @@ specification asks that a salt be unique for the lifetime of a master key, not o
 a transport, so `ssocks/replay_guard` is shareable: one guard across several
 listeners and, later, across UDP. Most implementations skip this — it costs
 memory and does nothing visible when it works.
+
+## UDP
+
+```gleam
+import ssocks/udp
+
+let assert Ok(guard) = replay_guard.start()
+
+let assert Ok(_) =
+  server.new(session) |> server.with_replay_guard(guard) |> server.start(8388)
+let assert Ok(_) =
+  udp.relay(session) |> udp.with_replay_guard(guard) |> udp.start(8388)
+```
+
+A Shadowsocks UDP packet stands alone: salt, one AEAD box holding the target
+address and the payload, an all-zero nonce. No framing, no ordering, no counter.
+`ssocks/datagram` does that part and has no sockets in it.
+
+What is left is the association, and it is the whole of the work. UDP has no
+connections, so the relay invents them: each client address gets a socket of its
+own to the outside, and replies on that socket go back to that client. That
+makes it a NAT, and it inherits the problem every NAT has — nothing will ever
+say that a client has finished, so entries have to leave on their own. An idle
+timeout drops what has gone quiet; a ceiling bounds memory against a flood, and
+since UDP source addresses are forged for free, that flood costs an attacker
+nothing.
+
+The guard is shared on purpose. The specification asks that a salt be unique for
+the lifetime of a master key, not of a transport, and a UDP packet carries a
+salt — two filters would let a salt seen over TCP be replayed over UDP.
 
 ## The incremental decoder
 
@@ -219,7 +249,7 @@ in both directions. A reversed nonce counter would be applied the same way when
 writing and when reading, and everything would pass while the library talked to
 nothing in the world.
 
-So three of them put [shadowsocks-rust][ssrust] on the other end.
+So four of them put [shadowsocks-rust][ssrust] on the other end.
 
 For the client, a plain TCP echo server sits behind a real `ssserver`, and this
 library's client asks that server to reach it. All three methods pass at 1, 100,
@@ -231,6 +261,10 @@ sits in front of this library's server. That direction is not implied by the
 first. The client always writes the target address header the same way, so until
 this test existed the server had only ever read headers this library produced —
 never one somebody else wrote, arriving at chunk boundaries it did not choose.
+
+For UDP, the packet format is different code with a different shape, and gets
+its own test: `sslocal --protocol tunnel -u` in front of this relay, with a
+plain UDP echo behind it.
 
 For `ss://`, its `ssurl` decodes URLs written here and this parses URLs written
 by it, field by field, on both targets, including a Japanese password, a tag
@@ -277,7 +311,7 @@ Individually:
 | `mise run test-property` | 6 properties, 10000 cases each, fixed seed |
 | `mise run test-fuzz` | 150000 hostile inputs; a decoder may error but not crash |
 | `mise run test-cross` | every runtime must compute byte-identical output |
-| `mise run interop` | round trip through a real shadowsocks-rust server |
+| `mise run interop` | four round trips against real shadowsocks-rust |
 | `mise run backends` | which cipher backend each runtime selects |
 
 Several of those exist because of gaps rather than preference.

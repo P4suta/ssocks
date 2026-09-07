@@ -198,6 +198,7 @@ description = "Against real shadowsocks-rust; the only tests that prove this is 
 run = [
   "mise run interop-tcp",
   "mise run interop-server",
+  "mise run interop-udp",
   "mise run interop-url",
 ]
 
@@ -208,6 +209,10 @@ run = "node scripts/interop.mjs"
 [tasks."interop-server"]
 description = "Point a real sslocal at this server; the only test of the server direction"
 run = "node scripts/server-interop.mjs"
+
+[tasks."interop-udp"]
+description = "Point a real sslocal at this UDP relay; the packet format has its own code"
+run = "node scripts/udp-interop.mjs"
 
 [tasks."interop-url"]
 description = "Read and write ss:// URLs against shadowsocks-rust's own ssurl"
