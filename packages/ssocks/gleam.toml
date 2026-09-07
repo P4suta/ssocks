@@ -10,7 +10,7 @@ target = "erlang"
 
 description = "Shadowsocks for Gleam: paste an ss:// URL and connect, or run a server"
 licences = ["MIT", "Apache-2.0"]
-repository = { type = "github", user = "P4suta", repo = "shadowsocks" }
+repository = { type = "github", user = "P4suta", repo = "ssocks" }
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
