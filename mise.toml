@@ -194,5 +194,16 @@ run = [
 ]
 
 [tasks.interop]
-description = "Round-trip through a real shadowsocks-rust server; the only test that proves this is Shadowsocks"
+description = "Against real shadowsocks-rust; the only tests that prove this is Shadowsocks"
+run = [
+  "mise run interop-tcp",
+  "mise run interop-url",
+]
+
+[tasks."interop-tcp"]
+description = "Round-trip a payload through a real ssserver"
 run = "node scripts/interop.mjs"
+
+[tasks."interop-url"]
+description = "Read and write ss:// URLs against shadowsocks-rust's own ssurl"
+run = "node scripts/url-interop.mjs"

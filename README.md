@@ -157,11 +157,18 @@ consistently wrong in both directions. A reversed nonce counter would be applied
 the same way when writing and when reading, and everything would pass while the
 library talked to nothing in the world.
 
-So there is one test that puts [shadowsocks-rust][ssrust] on the other end. A
-plain TCP echo server sits behind a real `ssserver`, and the client asks that
-server to reach it. All three methods pass at 1, 100, 16382, 16383, 16384 and
-40000 bytes; the last two are the first sizes that force a payload across chunk
-boundaries.
+So there are two tests that put [shadowsocks-rust][ssrust] on the other end.
+
+For the wire format, a plain TCP echo server sits behind a real `ssserver`, and
+the client asks that server to reach it. All three methods pass at 1, 100,
+16382, 16383, 16384 and 40000 bytes; the last two are the first sizes that force
+a payload across chunk boundaries.
+
+For `ss://`, its `ssurl` decodes URLs written here and this parses URLs written
+by it, field by field, including a Japanese password, a tag full of URL syntax
+and an IPv6 server. The second direction earns its keep on its own: `ssurl`
+escapes more than it has to — it writes `v2ray-plugin` as `v2ray%2Dplugin` — and
+a parser that only ever saw its own minimal output would never meet that.
 
 ```sh
 SSOCKS_SSRUST_DIR=/path/to/shadowsocks-rust mise run interop
