@@ -211,6 +211,67 @@ pub fn both_backends_seal_identical_bytes_test() {
   }
 }
 
+pub fn both_backends_agree_over_many_blocks_of_varying_bytes_test() {
+  // The case above uses one repeated byte and stops at a thousand, which is the
+  // wrong shape for what the portable Poly1305 needs checking against. It
+  // carries its accumulator in 17-bit limbs, and the bound keeping every
+  // intermediate inside float64's exact range is written for limbs at their
+  // maximum — which a repeated byte never produces, over a handful of blocks
+  // that never run the accumulator far.
+  //
+  // So: bytes that vary across the whole range, and lengths up to the chunk
+  // limit the protocol itself allows. If the radix were too wide, Erlang would
+  // carry the extra bits and JavaScript would drop them, and the two would stop
+  // agreeing here first.
+  case aead.supports(aead.Native, method.ChaCha20Poly1305) {
+    False -> Nil
+    True -> {
+      use size <- list.each([1024, 4096, 16_383])
+      let plaintext = varying(size)
+      let associated = varying(size % 137)
+
+      let assert Ok(native) =
+        aead.seal_using(
+          aead.Native,
+          method.ChaCha20Poly1305,
+          chacha_key(),
+          chacha_nonce(),
+          associated,
+          plaintext,
+        )
+      let assert Ok(portable) =
+        aead.seal_using(
+          aead.Portable,
+          method.ChaCha20Poly1305,
+          chacha_key(),
+          chacha_nonce(),
+          associated,
+          plaintext,
+        )
+      assert native == portable
+    }
+  }
+}
+
+/// Bytes that take every value, in an order a repeated pattern would not.
+///
+/// 181 is odd and coprime with 256, so stepping by it walks all 256 values
+/// before repeating — which is what puts limbs at their extremes rather than at
+/// one value.
+fn varying(size: Int) -> BitArray {
+  varying_loop(size, 0, [])
+}
+
+fn varying_loop(remaining: Int, at: Int, acc: List(BitArray)) -> BitArray {
+  case remaining {
+    0 -> acc |> list.reverse |> bit_array.concat
+    _ -> {
+      let byte = { at * 181 + 71 } % 256
+      varying_loop(remaining - 1, at + 1, [<<byte:8>>, ..acc])
+    }
+  }
+}
+
 pub fn each_backend_opens_what_the_other_sealed_test() {
   case aead.supports(aead.Native, method.ChaCha20Poly1305) {
     False -> Nil
