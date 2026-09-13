@@ -46,8 +46,13 @@ pub fn mac(key: BitArray, message: BitArray) -> BitArray {
   let r = clamp(pad_to_limbs(to_list(r_bytes)))
   let s = pad_to_limbs(to_list(s_bytes))
 
+  // The coefficient rows depend only on `r`, which is fixed for the whole
+  // message, so they are built once here rather than once per limb position per
+  // block — which is what `multiply` used to do. Rebuilding them was Θ(n) list
+  // construction in the length of the message for something that is Θ(1); the
+  // arithmetic below is unchanged, it just stops re-deriving its own operands.
   list.repeat(0, limbs)
-  |> accumulate(r, message)
+  |> accumulate(rows(r), message)
   |> reduce_once
   |> add(s)
   |> to_tag
@@ -70,7 +75,7 @@ fn clamp(r: List(Int)) -> List(Int) {
 /// Fold every 16 byte block of the message into the accumulator.
 fn accumulate(
   accumulator: List(Int),
-  r: List(Int),
+  rows: List(List(Int)),
   message: BitArray,
 ) -> List(Int) {
   case message {
@@ -78,13 +83,13 @@ fn accumulate(
     <<whole:bytes-size(16), rest:bits>> ->
       accumulator
       |> add(block_limbs(to_list(whole), 16))
-      |> multiply(r)
-      |> accumulate(r, rest)
+      |> multiply(rows)
+      |> accumulate(rows, rest)
     partial -> {
       let bytes = to_list(partial)
       accumulator
       |> add(block_limbs(bytes, list.length(bytes)))
-      |> multiply(r)
+      |> multiply(rows)
     }
   }
 }
@@ -127,14 +132,20 @@ fn add_loop(
 /// coefficient list: the first `i + 1` entries of `r` reversed, followed by the
 /// remainder reversed and scaled by 320. The 320 is the modular fold, since
 /// 2^136 is congruent to 320 modulo 2^130 - 5 at this limb width.
-fn multiply(accumulator: List(Int), r: List(Int)) -> List(Int) {
-  // The accumulator already has one entry per limb position, so mapping over it
-  // with its own index walks exactly the positions the product needs.
-  accumulator
-  |> list.index_map(fn(_, position) {
-    dot(accumulator, coefficients(r, position))
-  })
+fn multiply(accumulator: List(Int), rows: List(List(Int))) -> List(Int) {
+  // One row per limb position, in order, so this walks exactly the positions
+  // the product needs.
+  rows
+  |> list.map(fn(row) { dot(accumulator, row) })
   |> squeeze
+}
+
+/// The coefficient row for every limb position, built once per message.
+///
+/// `r` has one entry per limb position, so walking it with its own index walks
+/// exactly the positions a product needs.
+fn rows(r: List(Int)) -> List(List(Int)) {
+  list.index_map(r, fn(_, position) { coefficients(r, position) })
 }
 
 fn coefficients(r: List(Int), position: Int) -> List(Int) {

@@ -125,7 +125,6 @@ dir = "packages/ssocks_codec"
 # Every runtime this package claims, not the two it is convenient to run. Bun is
 # the one that matters most: it is the only one that selects the portable
 # ChaCha20, so a randomised run anywhere else never touches that code at all.
-# Measured at about sixteen seconds each.
 run = [
   "gleam run -m property_smoke --target erlang -- 10000 24301",
   "gleam run -m property_smoke --target javascript --runtime node -- 10000 24301",
@@ -136,8 +135,8 @@ run = [
 [tasks."test-fuzz"]
 description = "Feed adversarial and random bytes to every decoder; nothing may panic"
 dir = "packages/ssocks_codec"
-# All four, for the reason above. Measured at 39s on node, 23s on deno and 7s on
-# bun; the difference is the runtimes, not the work.
+# All four, for the reason above. The work is identical on each; what differs is
+# the runtime underneath, which is not this repository's to reason about.
 run = [
   "gleam run -m fuzz_smoke --target erlang -- 50000 91117",
   "gleam run -m fuzz_smoke --target javascript --runtime node -- 50000 91117",

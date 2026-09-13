@@ -256,7 +256,15 @@ pub opaque type Decoder {
   Decoder(
     method: Method,
     state: State,
+    /// Bytes that have arrived and not been consumed, in one piece.
     buffer: BitArray,
+    /// Bytes that have arrived since `buffer` was last made one piece, newest
+    /// first. See `decode`.
+    arrived: List(BitArray),
+    /// What `buffer` and `arrived` come to together. Kept rather than computed
+    /// so that deciding whether a step can proceed costs no walking of the
+    /// list.
+    held: Int,
     salt: Option(BitArray),
     chunk: Int,
   )
@@ -280,7 +288,15 @@ type State {
 
 /// A decoder positioned at the start of a stream.
 pub fn decoder(session_key: Key) -> Decoder {
-  Decoder(key.method(session_key), AwaitingSalt(session_key), <<>>, None, 0)
+  Decoder(
+    key.method(session_key),
+    AwaitingSalt(session_key),
+    <<>>,
+    [],
+    0,
+    None,
+    0,
+  )
 }
 
 /// The salt this stream opened with, once enough bytes have arrived to know it.
@@ -298,7 +314,7 @@ pub fn salt(decoder: Decoder) -> Option(BitArray) {
 /// protocol caps a chunk at `method.max_payload_size`. Useful when a connection
 /// has gone quiet and the question is whether the far end stopped mid-frame.
 pub fn buffered(decoder: Decoder) -> Int {
-  bit_array.byte_size(decoder.buffer)
+  decoder.held
 }
 
 /// How many whole chunks this decoder has read.
@@ -315,20 +331,64 @@ pub fn decode(
   decoder: Decoder,
   bytes: BitArray,
 ) -> Result(#(Decoder, List(BitArray)), StreamError) {
-  Decoder(..decoder, buffer: bit_array.concat([decoder.buffer, bytes]))
+  // Put aside rather than joined on. What arrives is joined to the buffer only
+  // when a step can actually use it, which is what keeps a peer from choosing
+  // how much work each of its bytes costs — see `decode_loop`.
+  Decoder(
+    ..decoder,
+    arrived: [bytes, ..decoder.arrived],
+    held: decoder.held + bit_array.byte_size(bytes),
+  )
   |> decode_loop([])
 }
 
+/// Take a step if there are bytes enough for one, and otherwise wait.
+///
+/// The check happens before anything is joined together, and that ordering is
+/// the whole of it. Joining on arrival instead would copy everything held on
+/// every call, so a peer feeding one frame a byte at a time would cost a copy
+/// of the frame so far per byte — quadratic in the frame, whose length is the
+/// peer's to choose up to `method.max_payload_size`. This way a frame costs a
+/// fixed number of passes over itself however finely it is cut up.
 fn decode_loop(
   decoder: Decoder,
   produced: List(BitArray),
 ) -> Result(#(Decoder, List(BitArray)), StreamError) {
+  case decoder.held >= wanted(decoder) {
+    False -> starved(decoder, produced)
+    True -> {
+      let decoder = in_one_piece(decoder)
+
+      case decoder.state {
+        AwaitingSalt(session_key) -> decode_salt(decoder, session_key, produced)
+        AwaitingLength(subkey, counter) ->
+          decode_length(decoder, subkey, counter, produced)
+        AwaitingPayload(subkey, counter, length) ->
+          decode_payload(decoder, subkey, counter, length, produced)
+      }
+    }
+  }
+}
+
+/// The smallest number of bytes the next step can do anything with.
+fn wanted(decoder: Decoder) -> Int {
   case decoder.state {
-    AwaitingSalt(session_key) -> decode_salt(decoder, session_key, produced)
-    AwaitingLength(subkey, counter) ->
-      decode_length(decoder, subkey, counter, produced)
-    AwaitingPayload(subkey, counter, length) ->
-      decode_payload(decoder, subkey, counter, length, produced)
+    AwaitingSalt(_) -> method.salt_size(decoder.method)
+    AwaitingLength(_, _) -> length_field_size + method.tag_size
+    AwaitingPayload(_, _, length) -> length + method.tag_size
+  }
+}
+
+/// Join what has arrived onto the end of the buffer, oldest first.
+fn in_one_piece(decoder: Decoder) -> Decoder {
+  case decoder.arrived {
+    [] -> decoder
+    arrived ->
+      Decoder(
+        ..decoder,
+        buffer: bit_array.concat([decoder.buffer, ..list.reverse(arrived)]),
+        arrived: [],
+      )
   }
 }
 
@@ -352,6 +412,7 @@ fn decode_salt(
             nonce.zero(),
           ),
           buffer: rest,
+          held: bit_array.byte_size(rest),
           salt: Some(salt),
         ),
         produced,
@@ -380,6 +441,7 @@ fn decode_length(
                   ..decoder,
                   state: AwaitingPayload(subkey, nonce.next(counter), length),
                   buffer: rest,
+                  held: bit_array.byte_size(rest),
                 ),
                 produced,
               )
@@ -407,6 +469,7 @@ fn decode_payload(
               ..decoder,
               state: AwaitingLength(subkey, nonce.next(counter)),
               buffer: rest,
+              held: bit_array.byte_size(rest),
               chunk: decoder.chunk + 1,
             ),
             [plaintext, ..produced],
@@ -444,7 +507,7 @@ fn failure(decoder: Decoder, stage: Stage, counter: Nonce) -> StreamError {
     stage:,
     chunk: decoder.chunk,
     nonce: nonce.to_bytes(counter),
-    buffered: bit_array.byte_size(decoder.buffer),
+    buffered: decoder.held,
   )
 }
 

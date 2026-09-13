@@ -243,16 +243,33 @@ fn joined(acc: List(BitArray)) -> BitArray {
 /// either side runs out, so a mismatch would silently shorten the output rather
 /// than complain, which is why the trimming and this function stay adjacent.
 ///
-/// A word-at-a-time fast path used to live here. It was removed: this cipher
-/// only runs where the platform has none, the block function dominates the cost
-/// either way, and one code path is one fewer place for an ordering mistake to
-/// hide in something security relevant.
+/// ### Four bytes at a time, and why that is the number
+///
+/// A byte at a time is the obvious way to write this and costs one list cell
+/// and one one-byte array per byte of traffic — Θ(n) allocations for something
+/// that needs Θ(n / 4). That is a deterministic difference, not a guess about
+/// which part of the cipher is slower, and it is worth having on the one
+/// implementation that carries every ChaCha20 byte on a runtime with no native
+/// one.
+///
+/// Four and not eight: the words here are exclusive-ored as integers, and this
+/// package holds every integer to 32 bits because Gleam integers are 64-bit
+/// floats on JavaScript and anything above 2^53 diverges between targets. The
+/// same reasoning as the module header, applied to the widest step this can
+/// safely take.
+///
+/// The tail is still a byte at a time. It runs at most three times per call.
 fn xor(left: BitArray, right: BitArray) -> BitArray {
   xor_loop(left, right, [])
 }
 
 fn xor_loop(left: BitArray, right: BitArray, acc: List(BitArray)) -> BitArray {
   case left, right {
+    <<a:32, left_rest:bits>>, <<b:32, right_rest:bits>> ->
+      xor_loop(left_rest, right_rest, [
+        <<int.bitwise_exclusive_or(a, b):32>>,
+        ..acc
+      ])
     <<a:8, left_rest:bits>>, <<b:8, right_rest:bits>> ->
       xor_loop(left_rest, right_rest, [
         <<int.bitwise_exclusive_or(a, b):8>>,

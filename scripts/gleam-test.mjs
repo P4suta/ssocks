@@ -40,7 +40,7 @@ const RUNTIMES = ["erlang", "node", "deno", "bun"];
 // that can go missing without anybody hearing about it, which is the failure
 // this gate exists for. Raise these in the commit that adds tests; never lower
 // one to make a red build green.
-const FLOORS = { ssocks_codec: 321, ssocks: 94 };
+const FLOORS = { ssocks_codec: 322, ssocks: 94 };
 
 if (!RUNTIMES.includes(runtime)) {
   console.error(`gleam-test: expected one of ${RUNTIMES.join(", ")}, got ${runtime ?? "nothing"}`);

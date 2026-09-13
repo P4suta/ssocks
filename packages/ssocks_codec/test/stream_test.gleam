@@ -26,6 +26,7 @@ import ssocks/key
 import ssocks/method
 import ssocks/nonce
 import ssocks/stream
+import ssocks/testing
 import vector.{bytes}
 
 const every_method = [
@@ -351,6 +352,50 @@ pub fn a_starved_decoder_holds_exactly_what_it_was_given_test() {
     feed(stream.decoder(test_key()), [fixed_salt(), filler(9)])
   assert produced == []
   assert stream.buffered(decoder) == 9
+}
+
+pub fn what_is_held_is_counted_rather_than_measured_test() {
+  // The decoder keeps what arrives to one side and joins it to the buffer only
+  // when a step can use it, so what it reports as held is a number it maintains
+  // rather than the size of something it can point at. These are the two ways
+  // the number and the bytes could drift apart.
+  let assert Ok(#(encoder, salted)) =
+    stream.encoder_with_salt(test_key(), fixed_salt())
+  let #(_, framed) = stream.encode(encoder, <<"held":utf8>>)
+
+  let whole = <<salted:bits, framed:bits>>
+  let size = bit_array.byte_size(whole)
+
+  // Nothing can be consumed before the salt is whole, so everything fed is
+  // still held — one byte at a time, counted after every one.
+  let assert Ok(prefix) = bit_array.slice(whole, 0, 20)
+  let #(counted, fed) =
+    list.fold(
+      testing.single_bytes(prefix),
+      #(stream.decoder(test_key()), 0),
+      fn(so_far, one) {
+        let #(decoder, fed) = so_far
+        let assert Ok(#(decoder, [])) = stream.decode(decoder, one)
+        assert stream.buffered(decoder) == fed + 1
+        #(decoder, fed + 1)
+      },
+    )
+  assert fed == 20
+  assert stream.buffered(counted) == 20
+
+  // And wherever the same bytes are cut, the decoder ends in the same place:
+  // same plaintext, nothing left over, same salt.
+  use cut <- list.each([1, 7, 32, 33, size - 1])
+  let assert Ok(head) = bit_array.slice(whole, 0, cut)
+  let assert Ok(tail) = bit_array.slice(whole, cut, size - cut)
+
+  let assert Ok(#(part, first)) =
+    stream.decode(stream.decoder(test_key()), head)
+  let assert Ok(#(done, second)) = stream.decode(part, tail)
+
+  assert list.append(first, second) == [<<"held":utf8>>]
+  assert stream.buffered(done) == 0
+  assert stream.salt(done) == option.Some(salted)
 }
 
 pub fn the_buffer_bound_is_one_whole_chunk_test() {

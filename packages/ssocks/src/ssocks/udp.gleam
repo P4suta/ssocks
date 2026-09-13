@@ -566,19 +566,21 @@ fn session_for(
 /// ### Why a queue rather than a scan
 ///
 /// This used to walk the whole table for its minimum on every packet from a
-/// new source. Measured on this table's default ceiling, that walk is about ten
-/// milliseconds — and the relay is one process, so at the ceiling the whole
-/// relay ran at about a hundred packets a second, for every client.
+/// new source: one pass over `max_sessions` entries per packet, so O(n) work
+/// for each of them.
 ///
 /// The trap is that reaching the ceiling and paying that cost are the same
-/// event: the table fills because somebody is forging source addresses, and
-/// every forged packet then bought ten milliseconds of the relay's only
-/// process. The defence was the amplifier.
+/// event. The table fills because somebody is forging source addresses, and n
+/// is therefore chosen by whoever is sending — so the cost of the defence grew
+/// with the success of the attack, which is the shape of an amplifier rather
+/// than of a limit.
 ///
 /// So the walk happens once and puts a batch of names aside; the next
-/// `max_sessions / 64` evictions are a list head and a dictionary delete. Names
-/// that expired on their own in the meantime are skipped, which is why this
-/// recurses rather than trusting the queue.
+/// `max_sessions / 64` evictions are a list head and a dictionary delete. That
+/// is one O(n log n) sort per n / 64 evictions — O(log n) amortised each, with
+/// no pass over the table at all in between. Names that expired on their own in
+/// the meantime are skipped, which is why this recurses rather than trusting
+/// the queue.
 fn make_room(state: State) -> State {
   case dict.size(state.sessions) < state.settings.max_sessions {
     True -> state
