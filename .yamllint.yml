@@ -4,6 +4,14 @@
 
 extends: default
 
+# `mise run lint` used to name each YAML on the command line, which is a list
+# that goes stale the first time somebody adds a file outside `.github`. It
+# passes `.` now, so this says which directories are not ours: dependencies
+# unpacked by the Gleam compiler, and whatever npm left behind.
+ignore:
+  - "**/build/**"
+  - "**/node_modules/**"
+
 rules:
   # Actions are pinned to full commit SHAs, which does not fit in 80 columns
   # once the readable version tag is appended. The pinning matters more.

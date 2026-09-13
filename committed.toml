@@ -49,8 +49,16 @@ allowed_types = [
 no_fixup = true
 no_wip = true
 
-# GitHub writes its own subject for a merged pull request, and that subject is
-# not conventional. The hook never sees one — it runs on `commit-msg`, and
-# those commits are made on the server — so linting a range will name it and a
-# commit will not.
-merge_commit = true
+# Two kinds of commit here are written by GitHub rather than by anybody, and
+# neither passes through this hook, which runs on `commit-msg` and so only ever
+# sees a message composed locally.
+#
+# The first is `8709d24`, the merge of pull request #1, and it is the only one:
+# merge and rebase merges are both off on the remote now. It will not pass a
+# lint over a range, and nothing can be done about that without rewriting
+# history.
+#
+# The second is every merge from here on. Squash is the only method left, so a
+# merged pull request arrives as an ordinary single-parent commit whose subject
+# is the pull request's title — linted like any other commit by anyone who
+# lints a range. Title a pull request the way you would write the subject.

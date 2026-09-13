@@ -182,12 +182,15 @@ run = "gleam docs build"
 description = "Spelling, TOML, workflows, YAML, secrets, and licence compliance"
 run = [
   "typos",
-  # Every TOML in the repository, not the three somebody remembered. A
-  # malformed `.gitleaks.toml` used to be a secrets scanner silently running on
-  # defaults.
-  "taplo check mise.toml typos.toml .gitleaks.toml REUSE.toml packages/ssocks_codec/gleam.toml packages/ssocks/gleam.toml",
+  # Every TOML and every YAML in the repository, found by `.taplo.toml` and
+  # `.yamllint.yml` rather than named here. Both used to be lists on these two
+  # lines, and a list is checked by whoever remembers it: a malformed
+  # `.gitleaks.toml` was once a secrets scanner silently running on defaults,
+  # and `committed.toml` arrived in the same change as the comment claiming
+  # the TOML list was exhaustive.
+  "taplo check",
   "actionlint",
-  "yamllint --strict .github lefthook.yml .yamllint.yml",
+  "yamllint --strict .",
   "gitleaks dir . --no-banner --redact --verbose",
   "uvx --from \"reuse[charset-normalizer]==6.2.0\" reuse lint",
 ]
