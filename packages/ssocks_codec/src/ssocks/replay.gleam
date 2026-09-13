@@ -36,6 +36,7 @@
 
 import gleam/dict.{type Dict}
 import gleam/int
+import gleam/option.{type Option, None, Some}
 
 /// Sixty seconds. Long enough to cover a replay arriving behind the original
 /// on a different path, short enough that the table stays small.
@@ -48,7 +49,16 @@ pub const default_capacity = 1_000_000
 
 /// Salts seen recently.
 pub opaque type Filter {
-  Filter(seen: Dict(BitArray, Int), window: Int, capacity: Int)
+  Filter(
+    seen: Dict(BitArray, Int),
+    window: Int,
+    capacity: Int,
+    /// When the table was last swept, by the same clock `observe` is given.
+    ///
+    /// `None` until the first `observe`, because a filter built now and used in
+    /// an hour has not been holding anything for that hour.
+    pruned_at: Option(Int),
+  )
 }
 
 /// Why a salt was not accepted.
@@ -63,7 +73,7 @@ pub type ReplayError {
 
 /// A filter with the default window and capacity.
 pub fn new() -> Filter {
-  Filter(dict.new(), default_window, default_capacity)
+  Filter(dict.new(), default_window, default_capacity, None)
 }
 
 /// How long a salt is remembered, in milliseconds.
@@ -88,12 +98,25 @@ pub fn observe(
   case dict.get(filter.seen, salt) {
     Ok(at) if now_ms - at < filter.window -> Error(AlreadySeen(salt))
     _ -> {
-      // Pruning is done here rather than on a timer so that this module needs
-      // no timer, and only when it is needed so that the ordinary path stays
-      // a single lookup and a single insert.
-      let filter = case dict.size(filter.seen) < filter.capacity {
-        True -> filter
-        False -> prune(filter, now_ms)
+      // Pruning is done here rather than on a timer, so that this module needs
+      // no clock of its own beyond the one it is handed.
+      //
+      // It used to happen only when the table was full, and that was wrong in a
+      // way that does not show up in a test: with the default capacity a server
+      // doing ten connections a second reaches a million salts after about a
+      // day, so until then it forgot nothing at all, held megabytes it had no
+      // use for, and `size` answered "salts since the last prune" while
+      // appearing to answer "salts inside the window".
+      //
+      // Once per window is enough to make both of those true, and it costs one
+      // comparison on the ordinary path. The sweep itself is no more expensive
+      // than the one it replaces — the same pass over the same table — and it
+      // happens when the table is small rather than when it is at its largest.
+      let filter = case
+        dict.size(filter.seen) >= filter.capacity || overdue(filter, now_ms)
+      {
+        True -> prune(filter, now_ms)
+        False -> filter
       }
 
       case dict.size(filter.seen) < filter.capacity {
@@ -106,6 +129,9 @@ pub fn observe(
 }
 
 /// How many salts are being remembered.
+///
+/// Bounded by the traffic of about two windows: the table is swept once per
+/// window, so an entry can outlive its window by at most one more.
 pub fn size(filter: Filter) -> Int {
   dict.size(filter.seen)
 }
@@ -113,6 +139,14 @@ pub fn size(filter: Filter) -> Int {
 /// The window this filter was built with, in milliseconds.
 pub fn window(filter: Filter) -> Int {
   filter.window
+}
+
+/// Whether a window has gone by since the last sweep.
+fn overdue(filter: Filter, now_ms: Int) -> Bool {
+  case filter.pruned_at {
+    None -> True
+    Some(at) -> now_ms - at >= filter.window
+  }
 }
 
 /// Drop everything older than the window.
@@ -123,6 +157,7 @@ fn prune(filter: Filter, now_ms: Int) -> Filter {
   Filter(
     ..filter,
     seen: dict.filter(filter.seen, fn(_, at) { now_ms - at < filter.window }),
+    pruned_at: Some(now_ms),
   )
 }
 

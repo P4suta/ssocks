@@ -23,6 +23,58 @@ fn counting_loop(value: Int, acc: List(Int)) -> List(Int) {
 
 // --- what it is for -----------------------------------------------------------
 
+pub fn a_filter_forgets_on_its_own_rather_than_only_when_full_test() {
+  // This used to prune only at capacity. With the default million-entry
+  // ceiling that meant a server doing ten connections a second forgot nothing
+  // for about a day — megabytes held for no reason, and `size` answering
+  // "salts since the last prune" while looking like it answered "salts inside
+  // the window".
+  let filter = replay.new() |> replay.with_window(1000)
+
+  let assert Ok(filter) = replay.observe(filter, <<1:256>>, 0)
+  let assert Ok(filter) = replay.observe(filter, <<2:256>>, 100)
+  assert replay.size(filter) == 2
+
+  // A window later, and nowhere near the capacity: both are gone.
+  let assert Ok(filter) = replay.observe(filter, <<3:256>>, 2000)
+  assert replay.size(filter) == 1
+}
+
+pub fn forgetting_does_not_let_a_salt_inside_the_window_through_test() {
+  // The sweep must not be eager. An entry younger than the window stays,
+  // whatever else is dropped around it.
+  let filter = replay.new() |> replay.with_window(1000)
+
+  let assert Ok(filter) = replay.observe(filter, <<1:256>>, 0)
+  let assert Ok(filter) = replay.observe(filter, <<2:256>>, 1500)
+
+  // 1 is two windows old and forgotten; 2 is half a window old and is not.
+  assert replay.observe(filter, <<2:256>>, 1600)
+    == Error(replay.AlreadySeen(<<2:256>>))
+  let assert Ok(_) = replay.observe(filter, <<1:256>>, 1600)
+}
+
+pub fn a_clock_that_does_not_move_still_prunes_once_test() {
+  // The first `observe` sweeps whatever a filter was built holding, which is
+  // nothing — the point is that "never pruned" is not treated as "pruned just
+  // now", or a long-lived filter created before its first use would wait a
+  // whole window before its first sweep.
+  let filter = replay.new() |> replay.with_window(1000)
+
+  let assert Ok(filter) = replay.observe(filter, <<9:256>>, 500)
+  assert replay.size(filter) == 1
+}
+
+pub fn a_filter_says_how_long_it_remembers_test() {
+  // `window` had no call site anywhere. It is how a caller checks that the
+  // filter it configured is the one it thinks it configured — the difference
+  // between a salt remembered for a minute and one remembered for an hour is
+  // not visible in any other way.
+  assert replay.window(replay.new()) == replay.default_window
+
+  assert replay.new() |> replay.with_window(1234) |> replay.window == 1234
+}
+
 pub fn a_salt_seen_once_is_accepted_test() {
   let assert Ok(_) = replay.observe(replay.new(), salt(1), 0)
 }

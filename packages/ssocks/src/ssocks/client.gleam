@@ -29,6 +29,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 import gleam/bit_array
+import gleam/erlang/process
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
@@ -39,6 +40,18 @@ import ssocks/stream
 import ssocks/url
 
 /// An open connection through a Shadowsocks server to one target.
+///
+/// Advance it by using what `send` and `receive` hand back. A `Connection` is a
+/// value, and encrypting twice from the same one repeats a nonce under the same
+/// subkey — which is the catastrophic failure for AEAD, not a degradation.
+/// Nothing here can stop that, because nothing can stop a value being used
+/// twice; what the design does buy is that it takes deliberately holding on to
+/// a superseded value rather than one wrong argument.
+///
+/// The same goes for the error path: a `send` that fails hands back an error
+/// and not a connection, so the one the caller still holds has a counter that
+/// has not moved. Retrying with it is correct. Retrying with it *and* keeping
+/// the old one is not.
 pub opaque type Connection {
   Connection(
     socket: mug.Socket,
@@ -143,6 +156,11 @@ pub fn send(
 /// Returns as soon as at least one chunk has been decrypted, with everything
 /// that completed. An empty return is not possible: either bytes arrived or
 /// this is an error, so a caller cannot mistake "not yet" for "nothing more".
+///
+/// A far end that closes cleanly arrives as `ReadFailed(mug.Closed)`, which is
+/// the end of the stream rather than a fault. The message-driven side says so
+/// properly — `handle_message` answers `Ended` — and this one cannot without
+/// changing what it returns.
 pub fn receive(
   connection: Connection,
   within timeout: Int,
@@ -186,7 +204,82 @@ fn read_until_a_chunk_completes(
   }
 }
 
-/// Close the connection. Safe to call more than once.
+// --- driving it from an event loop ------------------------------------------------
+
+/// What a message from the connection turned out to be.
+pub type Arrival {
+  /// Plaintext that became complete. Possibly none of it: a read that lands
+  /// inside a frame is the ordinary case, not an error.
+  Chunks(chunks: List(BitArray))
+  /// The far end closed cleanly. Nothing more is coming.
+  Ended
+}
+
+/// Ask for the next packet to arrive as a message rather than a return value.
+///
+/// One message per call, which is what makes this usable for flow control: a
+/// caller that has not finished with the last packet simply does not ask for
+/// the next one.
+///
+/// Do not mix this with `receive` on the same connection. `receive` reads the
+/// socket directly; once packets are being delivered as messages they are in a
+/// mailbox instead, and a direct read would sit there waiting for bytes that
+/// have already arrived somewhere else.
+pub fn receive_next_message(connection: Connection) -> Nil {
+  mug.receive_next_packet_as_message(connection.socket)
+}
+
+/// Add this kind of message to a selector.
+///
+/// The mapping function is what keeps a relay honest: `mug` and `glisten` both
+/// select the raw `{tcp, Socket, Data}` record and neither says which socket it
+/// came from, so a process holding two of them cannot tell them apart. One
+/// socket per process, and this is how its messages get into that process's
+/// selector alongside everything else it listens to.
+pub fn select_messages(
+  selector: process.Selector(message),
+  mapper: fn(mug.TcpMessage) -> message,
+) -> process.Selector(message) {
+  mug.select_tcp_messages(selector, mapper)
+}
+
+/// Decode a message that arrived for this connection.
+///
+/// The nonce advances only for frames that authenticated, so a connection
+/// handed back here is positioned exactly where the last complete chunk left
+/// off — feeding it the next message continues the stream.
+pub fn handle_message(
+  connection: Connection,
+  message: mug.TcpMessage,
+) -> Result(#(Connection, Arrival), ClientError) {
+  case message {
+    mug.SocketClosed(_) -> Ok(#(connection, Ended))
+    mug.TcpError(_, reason) -> Error(ReadFailed(reason))
+
+    mug.Packet(_, bytes) ->
+      case stream.decode(connection.decoder, bytes) {
+        Error(reason) -> Error(Framing(reason))
+        Ok(#(decoder, chunks)) ->
+          Ok(#(Connection(..connection, decoder:), Chunks(chunks)))
+      }
+  }
+}
+
+/// How many bytes the decoder is holding for a frame that has not finished.
+///
+/// Diagnostic, and the other half of `chunks_read`: a connection that has read
+/// no chunks and is holding bytes is mid-handshake rather than stuck.
+pub fn buffered(connection: Connection) -> Int {
+  stream.buffered(connection.decoder)
+}
+
+/// Close the connection, in both directions. Safe to call more than once.
+///
+/// There is no half-close. A caller that wants to signal "I have finished
+/// sending" while still reading — which some target protocols wait for — cannot
+/// say it here, because `mug.shutdown` takes no direction and this library does
+/// not reach past it to the socket. `ssocks/server` inherits the same limit:
+/// when either end goes, the whole relay goes.
 pub fn close(connection: Connection) -> Nil {
   let _ = mug.shutdown(connection.socket)
   Nil

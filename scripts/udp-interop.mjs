@@ -31,7 +31,27 @@ const PASSWORD = "udp-interop-password-1";
 const SIZES = [1, 100, 1200];
 const WINDOWS = process.platform === "win32";
 
+/// Everything that has to be let go of, whatever happens.
+///
+/// `fail` calls `process.exit(1)`, which runs no `finally` and no `exit`
+/// handler that was not registered for it — so a child spawned before the
+/// failure would outlive this script. That mattered more once these spawns
+/// became `detached`: the child is its own process group leader now, so it is
+/// not even taken down with the shell.
+const cleanups = [];
+
+function cleanUp() {
+  while (cleanups.length > 0) {
+    try {
+      cleanups.pop()();
+    } catch {
+      // Already gone, which is the outcome this is asking for.
+    }
+  }
+}
+
 function fail(message) {
+  cleanUp();
   console.error(`udp-interop: ${message}`);
   process.exit(1);
 }
@@ -42,10 +62,16 @@ function localBinary() {
 
 /// Kill a child and everything it started.
 ///
-/// The Gleam relay is spawned through a shell so that Windows can find the mise
-/// shim, which makes the child cmd.exe and the Erlang node its grandchild.
-/// Killing only the shell leaves the node running with its pipes open, and this
-/// script then finishes its work and never exits.
+/// The Gleam node is spawned through a shell so that Windows can find the mise
+/// shim, which means the child is cmd.exe and the node is its grandchild.
+/// Killing the shell leaves the node running with its pipes open, and this
+/// script then finishes its work and never exits — a CI task that hangs after
+/// passing.
+///
+/// On POSIX this needs `detached: true` on every spawn to work at all. Without
+/// it the child is in this process's group, `-child.pid` names no group of its
+/// own, the negative kill throws, and the fallback reaches only the shell —
+/// so the branch below was doing nothing the whole time it appeared to.
 function killTree(child) {
   if (child.pid === undefined) return;
   if (WINDOWS) {
@@ -115,11 +141,17 @@ function startRelay(port, method) {
       method,
       PASSWORD,
     ]),
-    { cwd: "packages/ssocks", stdio: ["ignore", "pipe", "pipe"], shell: true },
+    {
+      cwd: "packages/ssocks",
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
+      detached: !WINDOWS,
+    },
   );
 
   child.stdout.on("data", (d) => log.push(d.toString()));
   child.stderr.on("data", (d) => log.push(d.toString()));
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start the relay: ${error.message}`));
 
   return { child, log };
@@ -144,11 +176,12 @@ function startLocal(binary, localPort, relayPort, echoPort, method) {
       "-k",
       PASSWORD,
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "pipe", "pipe"], detached: !WINDOWS },
   );
 
   child.stdout.on("data", (d) => log.push(d.toString()));
   child.stderr.on("data", (d) => log.push(d.toString()));
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start sslocal: ${error.message}`));
 
   return { child, log };
@@ -186,6 +219,7 @@ function exchange(port, payload, timeoutMs = 10_000) {
 
 const binary = localBinary();
 const echo = await startEcho();
+cleanups.push(() => echo.socket.close());
 let failed = false;
 
 console.log(`udp-interop: echo on 127.0.0.1:${echo.port}`);
@@ -229,7 +263,7 @@ for (const method of METHODS) {
   killTree(relay.child);
 }
 
-echo.socket.close();
+cleanUp();
 
 if (failed) {
   console.error("\nudp-interop: a real client could not use this relay.");

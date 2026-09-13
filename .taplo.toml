@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# `mise run lint` named every TOML by hand, so a file was checked only if
+# somebody remembered to add a word to that line. One was not: `committed.toml`
+# arrived in the same change as the comment claiming the list was exhaustive.
+#
+# A glob cannot forget. The only thing left to say is which TOML in the tree is
+# not ours.
+include = ["**/*.toml"]
+
+# Dependencies, unpacked by the Gleam compiler. Twenty-two of them, none
+# written here, and `taplo check` walking from the root reaches all of them.
+exclude = ["**/build/**", "**/node_modules/**"]

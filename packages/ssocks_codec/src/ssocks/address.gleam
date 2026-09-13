@@ -46,6 +46,15 @@ pub type AddressError {
   WrongGroupCount(count: Int)
   EmptyDomain
   DomainTooLong(bytes: Int)
+  /// A host holding a character a host cannot hold.
+  ///
+  /// Without this, `parse` fell back to "it must be a domain then" for
+  /// anything it could not read as an address, so `::1:80` became a domain
+  /// called `::1` and `example.com:443:80` became one called
+  /// `example.com:443`. Both then went on the wire as names no resolver will
+  /// ever answer — a typo turning into a connection somewhere else, or
+  /// nowhere, rather than into an error.
+  MalformedDomain(name: String)
   /// Text with no port at all. Defaulting one would connect somewhere the
   /// caller did not ask for, so it is refused instead.
   MissingPort(text: String)
@@ -113,7 +122,36 @@ pub fn domain(name: String, port: Int) -> Result(Address, AddressError) {
   case bit_array.byte_size(<<name:utf8>>) {
     0 -> Error(EmptyDomain)
     size if size > max_domain_bytes -> Error(DomainTooLong(size))
-    _ -> Ok(Domain(name, port))
+    _ ->
+      case string.to_utf_codepoints(name) |> list.any(not_in_a_host) {
+        True -> Error(MalformedDomain(name))
+        False -> Ok(Domain(name, port))
+      }
+  }
+}
+
+/// Characters a host cannot hold.
+///
+/// Deliberately a denylist rather than a list of what is allowed. Names with
+/// underscores are served every day, non-ASCII names are real (this library
+/// puts them on the wire as UTF-8 and does not convert to punycode), and a
+/// parser insisting on letters, digits and hyphens would refuse hosts that
+/// resolve perfectly well.
+///
+/// What is here is the set whose presence means the text was cut in the wrong
+/// place: the URL and authority separators, and everything at or below a space.
+fn not_in_a_host(codepoint: UtfCodepoint) -> Bool {
+  let value = string.utf_codepoint_to_int(codepoint)
+
+  // Everything at or below a space, and DEL together with the C1 controls
+  // above it. Stopping at DEL would have let U+0085 — which some parsers treat
+  // as a line break — into a host name.
+  value <= 0x20
+  || { value >= 0x7f && value <= 0x9f }
+  || case value {
+    // : / ? # @ [ ] and backslash.
+    0x3a | 0x2f | 0x3f | 0x23 | 0x40 | 0x5b | 0x5d | 0x5c -> True
+    _ -> False
   }
 }
 
@@ -259,7 +297,82 @@ fn decode_domain(rest: BitArray) -> Result(DecodeOutcome, DecodeError) {
 
 // --- parsing text --------------------------------------------------------------
 
+/// A sentence for a person, for anything `parse`, `ipv4`, `ipv6` or `domain`
+/// can fail with.
+///
+/// These quote what they were given, which is right for a module whose input is
+/// an address. Callers whose input is something else — `ssocks/url`, where the
+/// same text may be the tail of a password — keep the shape of the problem and
+/// drop the text rather than passing it through here.
+pub fn explain(reason: AddressError) -> String {
+  case reason {
+    PortOutOfRange(port) ->
+      "the port "
+      <> int.to_string(port)
+      <> " is outside 0 to 65535, which is all the two bytes on the wire hold."
+    OctetOutOfRange(octet) ->
+      "the IPv4 octet " <> int.to_string(octet) <> " is outside 0 to 255."
+    GroupOutOfRange(group) ->
+      "the IPv6 group " <> int.to_string(group) <> " is outside 0 to 65535."
+    WrongGroupCount(count) ->
+      "an IPv6 address has eight groups and this has "
+      <> int.to_string(count)
+      <> "."
+    EmptyDomain -> "the host is empty."
+    MalformedDomain(name) ->
+      "`"
+      <> name
+      <> "` is not a host: it holds a character a host cannot. A bare IPv6 "
+      <> "address needs brackets — `[::1]:80`, not `::1:80` — and a second "
+      <> "colon usually means the port was written twice."
+    DomainTooLong(bytes) ->
+      "the host is "
+      <> int.to_string(bytes)
+      <> " bytes and the wire format allows 255. The limit is on the UTF-8, "
+      <> "not on the characters."
+    MissingPort(text) ->
+      "`"
+      <> text
+      <> "` has no port. Shadowsocks has no default one, and inventing a port "
+      <> "would connect somewhere nobody asked for."
+    MalformedPort(text) -> "`" <> text <> "` has something that is not a port."
+    MalformedIpv6(text) ->
+      "`"
+      <> text
+      <> "` is in brackets, so it is meant to be IPv6, and it is not a valid "
+      <> "one."
+  }
+}
+
+/// A sentence for a person, for bytes that could not be an address header.
+///
+/// Separate from `explain` because the failures are different: one is about
+/// text somebody typed, the other about bytes that arrived over a network.
+pub fn explain_decode(reason: DecodeError) -> String {
+  case reason {
+    UnknownAddressType(byte) ->
+      "address type "
+      <> int.to_string(byte)
+      <> " is not 1, 3 or 4. Either the stream is out of step, or this is not "
+      <> "an address header at all."
+    EmptyDomainOnWire -> "the header says a domain name of zero bytes."
+    DomainNotUtf8 -> "the header's domain name is not valid UTF-8."
+  }
+}
+
 /// Parse `host:port`, `1.2.3.4:port` or `[::1]:port`.
+///
+/// Two IPv6 spellings are not read: the IPv4-mapped form `[::ffff:1.2.3.4]`,
+/// and a zone identifier such as `[fe80::1%eth0]`. Neither has a place in a
+/// Shadowsocks target — the first is a way of writing an IPv4 address, which
+/// has its own address type on the wire, and the second is meaningful only on
+/// the machine that wrote it. Both are refused as `MalformedIpv6` rather than
+/// guessed at.
+///
+/// A domain name goes on the wire as its UTF-8, not as punycode. That is what
+/// the deployed protocol does, and converting would need an IDNA implementation
+/// this package does not carry; the 255-byte limit is therefore spent on the
+/// longer of the two spellings.
 pub fn parse(text: String) -> Result(Address, AddressError) {
   case string.starts_with(text, "[") {
     True -> parse_bracketed(text)

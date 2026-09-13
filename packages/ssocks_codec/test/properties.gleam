@@ -172,14 +172,15 @@ fn urls_round_trip(config: qcheck.Config) -> Nil {
   // The generators reach for every character that means something in a URL,
   // and for non-ASCII, because this is the first module here with string
   // semantics rather than byte ones and that is where the targets can diverge.
-  use #(chosen, password, server, tag, plugin) <- qcheck.run(
+  use #(chosen, password, server, tag, plugin, extras) <- qcheck.run(
     config,
-    qcheck.tuple5(
+    qcheck.tuple6(
       any_method(),
       url_text(0, 30),
       any_address(),
       qcheck.option_from(url_text(0, 20)),
       qcheck.option_from(any_plugin()),
+      any_extras(),
     ),
   )
 
@@ -187,8 +188,33 @@ fn urls_round_trip(config: qcheck.Config) -> Nil {
     url.new(chosen, password, server)
     |> with_optional_tag(tag)
     |> with_optional_plugin(plugin)
+    |> url.with_extras(extras)
 
   assert url.parse(url.to_string(built)) == Ok(built)
+}
+
+/// Query parameters this module has no opinion about, which it must carry
+/// through unchanged.
+///
+/// Names and values are drawn from what survives a query string verbatim:
+/// anything containing `&` or `=` would be re-split on the way back in, which
+/// is a property of query strings rather than of this encoder.
+fn any_extras() -> qcheck.Generator(List(#(String, String))) {
+  qcheck.generic_list(
+    qcheck.map2(query_word(1, 8), query_word(0, 12), fn(name, value) {
+      #(name, value)
+    }),
+    qcheck.bounded_int(0, 3),
+  )
+}
+
+fn query_word(low: Int, high: Int) -> qcheck.Generator(String) {
+  qcheck.generic_string(
+    qcheck.codepoint_from_strings("a", [
+      "z", "0", "9", "-", "_", ".", "~", "%", "2", "B", "+", ":",
+    ]),
+    qcheck.bounded_int(low, high),
+  )
 }
 
 fn any_method() -> qcheck.Generator(method.Method) {

@@ -32,6 +32,20 @@ fn a_stream() -> BitArray {
 
 // --- what a good stream says --------------------------------------------------
 
+pub fn a_plain_dump_is_offsets_and_hex_test() {
+  // `inspect.dump` is the one function here that needs no key: bytes nobody
+  // can decrypt still have to be readable when the question is where a stream
+  // went wrong rather than what it said.
+  let rendered = inspect.dump(<<0, 1, 2, 3, 255>>)
+
+  assert string.contains(rendered, "0000")
+  assert string.contains(rendered, "00010203ff")
+}
+
+pub fn dumping_nothing_says_nothing_rather_than_failing_test() {
+  assert inspect.dump(<<>>) != "\u{0}"
+}
+
 pub fn a_whole_stream_is_walked_field_by_field_test() {
   let dump = inspect.stream(session(), a_stream())
 

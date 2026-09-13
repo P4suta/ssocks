@@ -32,6 +32,10 @@ pub type UnsupportedMethod {
   /// A pre-SIP004 stream cipher. Real, once widely deployed, and deliberately
   /// not implemented here because it provides no authentication.
   StreamCipherMethod(name: String)
+  /// `none` or `plain`: no encryption at all, for deployments where a SIP003
+  /// plugin is the whole of the transport security. Its own case because
+  /// calling it a weak cipher would be wrong in the other direction.
+  PlaintextMethod(name: String)
   /// A Shadowsocks 2022 method. Not implemented yet; it needs BLAKE3.
   Aead2022Method(name: String)
   /// A genuine AEAD method that this library happens not to implement.
@@ -107,10 +111,15 @@ fn normalise(name: String) -> String {
 }
 
 fn classify(normalised: String, original: String) -> UnsupportedMethod {
-  case is_stream_cipher(normalised), is_2022(normalised) {
-    True, _ -> StreamCipherMethod(original)
-    _, True -> Aead2022Method(original)
-    False, False ->
+  case
+    is_plaintext(normalised),
+    is_stream_cipher(normalised),
+    is_2022(normalised)
+  {
+    True, _, _ -> PlaintextMethod(original)
+    _, True, _ -> StreamCipherMethod(original)
+    _, _, True -> Aead2022Method(original)
+    False, False, False ->
       case is_unimplemented_aead(normalised) {
         True -> UnimplementedAeadMethod(original)
         False -> UnknownMethod(original)
@@ -152,11 +161,20 @@ fn is_stream_cipher(name: String) -> Bool {
     | "chacha20"
     | "chacha20-ietf"
     | "xchacha20"
-    | "salsa20"
-    | "plain"
-    | "none" -> True
+    | "salsa20" -> True
     _ -> False
   }
+}
+
+/// `none` and `plain`, which are no encryption at all rather than weak
+/// encryption.
+///
+/// They were classified as stream ciphers here, and the sentence that came back
+/// said they carried no authentication — true, and beside the point, since they
+/// carry nothing. They exist so that a SIP003 plugin can be the only transport;
+/// refusing them is right, and saying why they are refused should be right too.
+fn is_plaintext(name: String) -> Bool {
+  name == "none" || name == "plain"
 }
 
 fn is_2022(name: String) -> Bool {
@@ -183,6 +201,13 @@ fn is_unimplemented_aead(name: String) -> Bool {
 /// moves the search somewhere else.
 pub fn explain(reason: UnsupportedMethod) -> String {
   case reason {
+    PlaintextMethod(name) ->
+      quoted(name)
+      <> " is not encryption: it is Shadowsocks with the cipher taken out, "
+      <> "meant for deployments where a SIP003 plugin is the whole of the "
+      <> "transport security. ssocks has no plugin support, so a connection "
+      <> "using it would be in the clear. "
+      <> suggestion
     StreamCipherMethod(name) ->
       quoted(name)
       <> " is a Shadowsocks stream cipher. Stream ciphers carry no "

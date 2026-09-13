@@ -6,7 +6,11 @@ name = "ssocks_codec"
 version = "0.1.0"
 # x-release-please-end
 gleam = ">= 1.18.0 and < 2.0.0"
-internal_modules = ["ssocks/internal/*"]
+# The cipher primitives are here because `ssocks/internal/aead` needs a second
+# implementation to compare the platform's against, not because a caller does.
+# They take a nonce as an argument, which every published function deliberately
+# does not — see `ssocks/nonce`.
+internal_modules = ["ssocks/internal/*", "ssocks/cipher/*"]
 
 description = "Sans-IO Shadowsocks AEAD codec for Gleam, running on Erlang and Node-family JavaScript"
 licences = ["MIT", "Apache-2.0"]

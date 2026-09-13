@@ -3,6 +3,7 @@
 
 import gleam/erlang/process.{type Subject}
 import gleam/int
+import gleam/list
 import glip
 import ssocks/address
 import ssocks/datagram
@@ -217,7 +218,11 @@ pub fn a_quiet_session_is_swept_test() {
     round_trip(client(), relaying, target_at(echoing), <<"then quiet":utf8>>)
   assert udp.sessions(relaying, within: 1000) == Ok(1)
 
-  let assert Ok(udp.SessionExpired(remaining)) = wait_for_expiry(watched)
+  let assert Ok(udp.SessionExpired(expired, remaining)) =
+    wait_for_expiry(watched)
+  // How many went, as well as how many are left: a caller watching this can
+  // draw the turnover and not only the table's size.
+  assert expired == 1
   assert remaining == 0
   assert udp.sessions(relaying, within: 1000) == Ok(0)
 
@@ -241,11 +246,67 @@ pub fn the_table_has_a_ceiling_test() {
   let assert Ok(Nil) = udp.stop(relaying)
 }
 
+pub fn a_socket_that_will_not_open_is_a_dropped_packet_rather_than_a_crash_test() {
+  // A new client address opens a socket, and UDP source addresses are forged
+  // for free, so running out of them is reachable from outside and cheaply —
+  // an ephemeral port range is exhausted long before `max_sessions` on a
+  // default configuration. This used to be a `let assert`, which made the
+  // relay's own crash the answer, and `start` links, so the crash reached
+  // whoever started it.
+  let #(relaying, watched) = start(plain)
+  let socket = client()
+  let packet = datagram.seal(session(), target_at(1), <<"nowhere":utf8>>)
+
+  // Hold every ephemeral port there is, so the relay cannot have one.
+  let held = exhaust([], 100_000)
+
+  let assert Ok(Nil) =
+    toss.send_to(socket, loopback(), udp.port(relaying), packet)
+  let assert Ok(udp.Rejected(udp.NoSocket(_))) = rejection(watched)
+
+  list.each(held, toss.close)
+
+  // Still there, still answering, and holding nothing for the client it could
+  // not serve.
+  assert udp.sessions(relaying, within: 2000) == Ok(0)
+
+  toss.close(socket)
+  let assert Ok(Nil) = udp.stop(relaying)
+}
+
+/// Open sockets until the operating system will not give another.
+///
+/// Bounded, and loudly: a machine where this cannot be provoked would
+/// otherwise turn the test above into one that silently checks nothing.
+fn exhaust(held: List(toss.Socket), remaining: Int) -> List(toss.Socket) {
+  case remaining {
+    0 -> {
+      list.each(held, toss.close)
+      panic as "could not exhaust the ephemeral port range in 100000 sockets"
+    }
+    _ ->
+      case toss.open(toss.new(port: 0)) {
+        Ok(socket) -> exhaust([socket, ..held], remaining - 1)
+        Error(_) -> held
+      }
+  }
+}
+
+/// The next rejection, skipping whatever bookkeeping precedes it.
+fn rejection(watched: Subject(udp.Event)) -> Result(udp.Event, Nil) {
+  case process.receive(watched, 3000) {
+    Ok(udp.Rejected(_) as event) -> Ok(event)
+    Ok(_) -> rejection(watched)
+    Error(Nil) -> Error(Nil)
+  }
+}
+
 // --- helpers ------------------------------------------------------------------
 
 fn wait_for_expiry(watched: Subject(udp.Event)) -> Result(udp.Event, Nil) {
   case process.receive(watched, 3000) {
-    Ok(udp.SessionExpired(remaining)) -> Ok(udp.SessionExpired(remaining))
+    Ok(udp.SessionExpired(expired, remaining)) ->
+      Ok(udp.SessionExpired(expired, remaining))
     Ok(_) -> wait_for_expiry(watched)
     Error(Nil) -> Error(Nil)
   }
@@ -264,6 +325,48 @@ pub fn asking_a_relay_that_has_stopped_is_an_error_not_a_crash_test() {
   // relay going away. And that this is not a race: `stop` waits for the relay
   // to be gone, so by the time it returns there is nothing left to answer.
   assert udp.sessions(relaying, within: 1000) == Error(Nil)
+}
+
+pub fn a_relay_without_a_guard_forwards_a_replayed_packet_test() {
+  // As with the server: skipping the check is reasonable only when something
+  // else is doing it, and until this test nothing reached the branch.
+  let answering = udp_echo.start()
+  let #(relaying, watched) = start(udp.without_replay_guard)
+
+  let socket = client()
+  let packet = datagram.seal(session(), target_at(answering), <<"twice":utf8>>)
+
+  let assert Ok(Nil) =
+    toss.send_to(socket, loopback(), udp.port(relaying), packet)
+  let assert Ok(udp.Forwarded(_, _)) = forwarding(watched)
+
+  // The same salt again, and no filter to remember it: forwarded rather than
+  // rejected, which is the whole of what this option does.
+  let assert Ok(Nil) =
+    toss.send_to(socket, loopback(), udp.port(relaying), packet)
+  let assert Ok(udp.Forwarded(_, _)) = forwarding(watched)
+
+  toss.close(socket)
+  let assert Ok(Nil) = udp.stop(relaying)
+}
+
+/// The next forwarding or rejection, skipping the bookkeeping around it.
+fn forwarding(watched: process.Subject(udp.Event)) -> Result(udp.Event, Nil) {
+  case process.receive(watched, 2000) {
+    Ok(udp.SessionOpened(_)) | Ok(udp.Returned(_, _)) -> forwarding(watched)
+    other -> other
+  }
+}
+
+pub fn an_interface_that_is_not_an_address_is_refused_test() {
+  // This used to fall through to "every interface", silently. A relay is a
+  // thing an operator binds to one address on purpose, and a typo in that
+  // address should not be the difference between a private relay and a public
+  // one.
+  assert udp.relay(session())
+    |> udp.bind("127.0.0.0.1")
+    |> udp.start(0)
+    == Error(udp.BadInterface("127.0.0.0.1"))
 }
 
 pub fn the_port_is_free_once_stop_returns_test() {
