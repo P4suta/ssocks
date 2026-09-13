@@ -77,6 +77,8 @@ pub type Event {
   Requested(target: address.Address)
   /// A `UDP ASSOCIATE`, served on this address.
   Associated(where: address.Address)
+  /// An association could not be opened, and the client was told so.
+  NotAssociated(reason: associate.Opening)
   /// One datagram in an association was not relayed. Reported rather than
   /// acted on: a single bad datagram does not end an association.
   Dropped(reason: associate.Rejection)
@@ -559,7 +561,8 @@ fn from_association(
       }
     }
 
-    associate.Failed(_) -> {
+    associate.Failed(reason) -> {
+      state.settings.watching(NotAssociated(reason))
       let _ =
         say(
           connection,

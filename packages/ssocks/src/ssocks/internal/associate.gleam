@@ -54,11 +54,30 @@ pub type Event {
   /// other process in this package does it: a subject has to be created by the
   /// process that will receive on it.
   Bound(where: Address, commands: Subject(Command))
-  /// No socket could be opened, so there is nothing to tell the client.
-  Failed(reason: udp_client.UdpClientError)
+  /// Nothing could be opened, so there is nothing to tell the client.
+  Failed(reason: Opening)
   /// A datagram was not relayed, and why. Reported rather than acted on: a
   /// single bad datagram does not end an association.
   Dropped(reason: Rejection)
+}
+
+/// Why an association could not be opened.
+///
+/// Four cases rather than one, because the first version of this reported two
+/// of them as `toss.BadArgument` — a socket that would not say its own port,
+/// and an interface that would not become an address — and neither is a bad
+/// argument. Reporting the wrong reason is the thing this package spends most
+/// of its error types avoiding.
+pub type Opening {
+  /// No socket could be opened for the client to send its datagrams to.
+  NoSocket(reason: toss.Error)
+  /// The socket opened and would not say which port it got.
+  NoPort
+  /// The interface this proxy listens on is not one an address can be built
+  /// from, so there is nothing to tell the client to send to.
+  NoAddress(interface: String)
+  /// The tunnel to the Shadowsocks server could not be opened.
+  NoTunnel(reason: udp_client.UdpClientError)
 }
 
 /// Why one datagram was not relayed.
@@ -132,41 +151,47 @@ pub fn start(
 fn open(
   config: url.Config,
   interface: String,
-) -> Result(
-  #(toss.Socket, udp_client.Client, Address),
-  udp_client.UdpClientError,
-) {
-  let options = case glip.parse_ip(interface) {
-    Ok(ip) -> toss.using_interface(toss.new(port: 0), ip)
-    Error(Nil) -> toss.new(port: 0)
+) -> Result(#(toss.Socket, udp_client.Client, Address), Opening) {
+  // `localhost` is what `local.bind` accepts and `glip.parse_ip` does not, and
+  // falling through to "no interface" would put this socket on every one of
+  // them — the same silent widening `udp.bind` used to do.
+  let host = case interface {
+    "localhost" -> "127.0.0.1"
+    other -> other
   }
 
-  case toss.open(options) {
-    Error(reason) -> Error(udp_client.CouldNotOpen(reason))
-    Ok(facing) ->
-      case toss.local_port(facing) {
-        Error(Nil) -> {
-          toss.close(facing)
-          Error(udp_client.CouldNotOpen(toss.BadArgument))
-        }
-        Ok(port) ->
-          case udp_client.open(url.key(config), through: url.server(config)) {
-            Error(reason) -> {
+  case glip.parse_ip(host) {
+    Error(Nil) -> Error(NoAddress(interface))
+    Ok(ip) ->
+      case toss.open(toss.using_interface(toss.new(port: 0), ip)) {
+        Error(reason) -> Error(NoSocket(reason))
+        Ok(facing) ->
+          case toss.local_port(facing) {
+            Error(Nil) -> {
               toss.close(facing)
-              Error(reason)
+              Error(NoPort)
             }
-            Ok(sending) ->
-              case address.parse(interface <> ":" <> int.to_string(port)) {
-                Error(_) -> {
+            Ok(port) ->
+              case
+                udp_client.open(url.key(config), through: url.server(config))
+              {
+                Error(reason) -> {
                   toss.close(facing)
-                  udp_client.close(sending)
-                  Error(udp_client.CouldNotOpen(toss.BadArgument))
+                  Error(NoTunnel(reason))
                 }
-                Ok(where) -> {
-                  let _ = toss.receive_next_datagram_as_message(facing)
-                  let _ = udp_client.receive_next_message(sending)
-                  Ok(#(facing, sending, where))
-                }
+                Ok(sending) ->
+                  case address.parse(host <> ":" <> int.to_string(port)) {
+                    Error(_) -> {
+                      toss.close(facing)
+                      udp_client.close(sending)
+                      Error(NoAddress(interface))
+                    }
+                    Ok(where) -> {
+                      let _ = toss.receive_next_datagram_as_message(facing)
+                      let _ = udp_client.receive_next_message(sending)
+                      Ok(#(facing, sending, where))
+                    }
+                  }
               }
           }
       }

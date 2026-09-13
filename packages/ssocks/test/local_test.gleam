@@ -261,6 +261,57 @@ fn target_at(port: Int) -> address.Address {
   where
 }
 
+pub fn an_association_on_localhost_is_bound_to_loopback_test() {
+  // `local.bind` accepts `localhost`, and `glip.parse_ip` does not read it. The
+  // association used to fall through to "no interface" there, which is every
+  // interface — the same silent widening `udp.bind` used to do, one layer down.
+  // What the client is told to send to is the observable half of that.
+  let answering = udp_echo.start()
+  let assert Ok(listening) =
+    server.new(session()) |> server.bind("127.0.0.1") |> server.start(0)
+  let port = server.port(listening)
+  let assert Ok(relaying) =
+    udp.relay(session()) |> udp.bind("127.0.0.1") |> udp.start(port)
+
+  let assert Ok(proxy) =
+    local.new(config_for(port)) |> local.bind("localhost") |> local.start(0)
+
+  let socket = connect(local.port(proxy))
+  let assert Ok(_) =
+    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  let #(_, _) = until(socket, <<>>, socks5.decode_choice)
+
+  let assert Ok(unknown) = address.parse("0.0.0.0:0")
+  let assert Ok(_) =
+    mug.send(socket, socks5.encode_request(socks5.Associate, unknown))
+  let #(#(outcome, where), _) = until(socket, <<>>, socks5.decode_reply)
+
+  assert outcome == socks5.Succeeded
+  assert address.host(where) == "127.0.0.1"
+
+  // And it works, rather than merely being bound somewhere respectable.
+  let assert Ok(sending) = toss.open(toss.new(port: 0))
+  let assert Ok(ip) = glip.parse_ip(address.host(where))
+  let target = target_at(answering)
+
+  let assert Ok(Nil) =
+    toss.send_to(
+      sending,
+      ip,
+      address.port(where),
+      socks5.encode_datagram(target, <<"loopback":utf8>>),
+    )
+  let assert Ok(#(_, _, back)) =
+    toss.receive(sending, max_length: 65_535, timeout_milliseconds: 5000)
+  assert socks5.decode_datagram(back) == Ok(#(target, <<"loopback":utf8>>))
+
+  toss.close(sending)
+  let _ = mug.shutdown(socket)
+  let assert Ok(Nil) = local.stop(proxy)
+  let assert Ok(Nil) = udp.stop(relaying)
+  let assert Ok(Nil) = server.stop(listening)
+}
+
 // --- what it will not do ------------------------------------------------------------
 
 pub fn bind_is_answered_with_command_not_supported_test() {

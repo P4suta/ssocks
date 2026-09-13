@@ -68,6 +68,7 @@ fn describe(event: local.Event) -> String {
     local.Accepted -> "accepted"
     local.Requested(target) -> "requested " <> address.to_string(target)
     local.Associated(where) -> "associated " <> address.to_string(where)
+    local.NotAssociated(reason) -> "not associated " <> string.inspect(reason)
     local.Dropped(reason) -> "dropped " <> string.inspect(reason)
     local.Declined(reply) -> "declined " <> string.inspect(reply)
     local.Malformed(reason) -> "malformed " <> string.inspect(reason)
