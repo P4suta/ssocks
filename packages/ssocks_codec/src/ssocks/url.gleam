@@ -73,6 +73,14 @@ pub opaque type Config {
     server: Address,
     tag: Option(String),
     plugin: Option(Plugin),
+    /// Every other query parameter, exactly as it arrived.
+    ///
+    /// `plugin` is the only one this module understands, and it used to be the
+    /// only one it kept — `?plugin=…&group=Tokyo` came back without the group.
+    /// A module whose stated purpose is that a URL survives a round trip
+    /// cannot quietly drop the fields it has no opinion about, so these are
+    /// carried through unparsed and unescaped.
+    extras: List(#(String, String)),
   )
 }
 
@@ -131,6 +139,8 @@ pub type ServerProblem {
   NoHost
   HostTooLong
   MalformedIpv6
+  /// The host holds a character a host cannot. A bare IPv6 address without its
+  /// brackets is the usual cause.
   MalformedHost
 }
 
@@ -158,7 +168,29 @@ pub fn parse(text: String) -> Result(Config, UrlError) {
   use tag <- result.try(percent_decoded(fragment, Tag))
   use plugin <- result.try(plugin_of(query))
 
-  Ok(Config(chosen, password, where, tag, plugin))
+  Ok(Config(chosen, password, where, tag, plugin, extras_of(query)))
+}
+
+/// Every query parameter except `plugin`, in the order it arrived.
+fn extras_of(query: Option(String)) -> List(#(String, String)) {
+  case query {
+    None -> []
+    Some(text) ->
+      string.split(text, "&")
+      |> list.filter_map(fn(pair) {
+        case string.split_once(pair, "=") {
+          Ok(#("plugin", _)) -> Error(Nil)
+          Ok(#(name, value)) -> Ok(#(name, value))
+          // A bare flag with no `=`. Kept, with an empty value, because
+          // dropping it would lose a field just the same.
+          Error(Nil) ->
+            case pair {
+              "" -> Error(Nil)
+              _ -> Ok(#(pair, ""))
+            }
+        }
+      })
+  }
 }
 
 /// Keep the kind and drop the text.
@@ -174,6 +206,11 @@ fn server_problem(reason: address.AddressError) -> ServerProblem {
     address.EmptyDomain -> NoHost
     address.DomainTooLong(_) -> HostTooLong
     address.MalformedIpv6(_) -> MalformedIpv6
+    address.MalformedDomain(_) -> MalformedHost
+    // `address.parse` bounds every octet and every group before it builds one,
+    // so these three come only from the constructors. Mapped anyway, because
+    // the mapping has to be total and a silent hole here would be a `parse`
+    // that crashed on an input nobody had thought of.
     address.OctetOutOfRange(_) -> MalformedHost
     address.GroupOutOfRange(_) -> MalformedHost
     address.WrongGroupCount(_) -> MalformedHost
@@ -258,8 +295,13 @@ fn method_and_password(text: String) -> Result(#(String, String), UrlError) {
 /// Decode either alphabet.
 ///
 /// SIP002 asks for the websafe one, but standard-alphabet URLs are handed out
-/// in the wild and refusing one helps nobody. The two alphabets differ in two
-/// characters, so a string valid in one is almost never valid in the other.
+/// in the wild and refusing one helps nobody.
+///
+/// One call does both. `base64_url_decode` rewrites `-` to `+` and `_` to `/`
+/// and then decodes, which leaves a standard-alphabet blob untouched and
+/// correct — the two alphabets differ only in those two characters. The second
+/// branch is there for padding that the first will not take, not for the
+/// alphabet.
 fn decode_base64_text(encoded: String) -> Result(String, UrlError) {
   let bytes = case bit_array.base64_url_decode(encoded) {
     Ok(bytes) -> Ok(bytes)
@@ -321,7 +363,7 @@ fn plugin_parameter(pairs: List(String)) -> Option(String) {
 
 /// A configuration for a server, without a tag or a plugin.
 pub fn new(chosen: Method, password: String, where: Address) -> Config {
-  Config(chosen, password, where, None, None)
+  Config(chosen, password, where, None, None, [])
 }
 
 /// Name this configuration. The tag is a label for humans and carries no
@@ -360,6 +402,23 @@ pub fn plugin(config: Config) -> Option(Plugin) {
   config.plugin
 }
 
+/// Query parameters other than `plugin`, as they arrived.
+///
+/// Names and values are still percent-encoded, because this module does not
+/// know what any of them mean and decoding one would be a guess about it.
+pub fn extras(config: Config) -> List(#(String, String)) {
+  config.extras
+}
+
+/// Carry these query parameters alongside `plugin`.
+///
+/// Written out in the order given, after `plugin`. Nothing is escaped: a caller
+/// putting a value here is describing bytes for a URL, and escaping them twice
+/// is how a `;` becomes `%253B`.
+pub fn with_extras(config: Config, extras: List(#(String, String))) -> Config {
+  Config(..config, extras:)
+}
+
 /// The master key this URL describes.
 ///
 /// Derived on each call rather than stored, so a `Config` holds a password and
@@ -385,7 +444,7 @@ pub fn to_string(config: Config) -> String {
   <> bit_array.base64_url_encode(<<credentials:utf8>>, False)
   <> "@"
   <> address.to_string(config.server)
-  <> plugin_query(config.plugin)
+  <> query_string(config.plugin, config.extras)
   <> tag_fragment(config.tag)
 }
 
@@ -399,20 +458,38 @@ pub fn redacted(config: Config) -> String {
   <> method.to_string(config.method)
   <> ":<redacted>@"
   <> address.to_string(config.server)
-  <> plugin_query(config.plugin)
+  <> query_string(config.plugin, config.extras)
   <> tag_fragment(config.tag)
 }
 
-fn plugin_query(plugin: Option(Plugin)) -> String {
-  case plugin {
-    None -> ""
-    Some(Plugin(name, arguments)) -> {
-      let value = case arguments {
-        None -> name
-        Some(arguments) -> name <> ";" <> arguments
+/// The whole query: `plugin` if there is one, then everything else, unchanged.
+fn query_string(
+  plugin: Option(Plugin),
+  extras: List(#(String, String)),
+) -> String {
+  let pairs =
+    case plugin {
+      None -> []
+      Some(Plugin(name, arguments)) -> {
+        let value = case arguments {
+          None -> name
+          Some(arguments) -> name <> ";" <> arguments
+        }
+        ["plugin=" <> uri.percent_encode(value)]
       }
-      "?plugin=" <> uri.percent_encode(value)
     }
+    |> list.append(
+      list.map(extras, fn(pair) {
+        case pair.1 {
+          "" -> pair.0
+          value -> pair.0 <> "=" <> value
+        }
+      }),
+    )
+
+  case pairs {
+    [] -> ""
+    _ -> "?" <> string.join(pairs, "&")
   }
 }
 

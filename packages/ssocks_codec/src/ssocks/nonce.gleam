@@ -17,10 +17,17 @@
 //// ### Why this is a type
 ////
 //// Reusing a nonce under one key is the catastrophic failure for AEAD: it
-//// leaks the keystream, and for Poly1305 it leaks the authentication key. There
-//// is deliberately no way to set a counter to an arbitrary value from outside a
-//// session. `from_bytes` exists for tests and diagnostics, and nothing in the
-//// codec accepts a nonce from a caller.
+//// leaks the keystream, and for Poly1305 it leaks the authentication key.
+////
+//// So no published function that performs an AEAD operation takes a nonce.
+//// `stream` and `datagram` keep their counters inside an opaque encoder or
+//// derive them from the salt; there is nowhere to hand one in. The cipher
+//// primitives under `ssocks/cipher` do take one, which is what a primitive is,
+//// and they are internal for that reason.
+////
+//// `from_bytes` is the one function here that reads a counter from bytes. It
+//// builds a `Nonce` for tests and for `ssocks/inspect` to print, and a `Nonce`
+//// built that way cannot reach an AEAD call: nothing accepts one.
 
 // SPDX-FileCopyrightText: 2026 ssocks contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0

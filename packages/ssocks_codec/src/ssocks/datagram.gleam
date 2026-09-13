@@ -24,6 +24,7 @@
 
 import gleam/bit_array
 import gleam/crypto
+import gleam/int
 import gleam/result
 import ssocks/address.{type Address}
 import ssocks/internal/aead
@@ -44,6 +45,34 @@ pub type DatagramError {
   MalformedAddress(reason: address.DecodeError)
   /// The packet authenticated but ends inside its address header.
   TruncatedAddress
+}
+
+/// A sentence for a person.
+pub fn explain(reason: DatagramError) -> String {
+  case reason {
+    TooShort(needed_at_least:, actual:) ->
+      "the packet is "
+      <> int.to_string(actual)
+      <> " bytes and a salt and a tag alone need "
+      <> int.to_string(needed_at_least)
+      <> ", so it cannot be a packet whatever it holds."
+    AuthenticationFailed ->
+      "the packet did not authenticate. A wrong key, a wrong salt or "
+      <> "tampering — which of those is not distinguished, because the caller "
+      <> "cannot act on the difference and an attacker could."
+    BadSaltLength(expected:, actual:) ->
+      "a salt of "
+      <> int.to_string(actual)
+      <> " bytes was supplied where this method needs "
+      <> int.to_string(expected)
+      <> "."
+    MalformedAddress(reason) ->
+      "the packet authenticated and its address header is not one: "
+      <> address.explain_decode(reason)
+    TruncatedAddress ->
+      "the packet authenticated and ends inside its address header. A "
+      <> "datagram arrives whole or not at all, so there is no more coming."
+  }
 }
 
 /// Build a packet with a fresh random salt.
@@ -129,8 +158,15 @@ pub fn open(
 
 /// The salt at the front of a packet, without decrypting anything.
 ///
-/// A server checks this against its replay filter first, so a packet it is
-/// going to drop costs it no cryptography.
+/// This is what a replay filter is keyed on. Note the order a server should use
+/// it in: **authenticate first, then record the salt.** Reading a salt is free
+/// for the reader and free for whoever sent it, so a relay that recorded one
+/// before authenticating would let anybody fill a bounded filter with forged
+/// packets — and the filter is meant to be shared with the TCP server, so that
+/// would refuse honest traffic on both transports. Authenticating first costs
+/// one AEAD open per forged packet and stores nothing.
+///
+/// `ssocks/udp` does it in that order, and so does `ssocks/server`.
 pub fn salt_of(
   session_key: Key,
   packet: BitArray,

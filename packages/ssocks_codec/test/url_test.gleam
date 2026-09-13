@@ -277,6 +277,91 @@ fn all_free_of(
   }
 }
 
+pub fn a_tag_and_a_plugin_can_be_taken_off_again_test() {
+  // The `without_` builders had no call site anywhere, in `src` or in `test`.
+  // They are how a caller strips a label before storing a configuration, which
+  // is the one thing a tag is actually for.
+  let assert Ok(config) =
+    url.parse(
+      "ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388?plugin=obfs#Tokyo",
+    )
+
+  assert url.tag(config) == Some("Tokyo")
+  assert url.plugin(config) != None
+
+  let bare = config |> url.without_tag |> url.without_plugin
+
+  assert url.tag(bare) == None
+  assert url.plugin(bare) == None
+  assert !string.contains(url.to_string(bare), "#")
+  assert !string.contains(url.to_string(bare), "plugin")
+
+  // And what is left still round trips.
+  assert url.parse(url.to_string(bare)) == Ok(bare)
+}
+
+// --- every field survives a round trip -------------------------------------------
+
+pub fn a_query_parameter_this_module_does_not_know_is_kept_test() {
+  // The module's stated purpose is that a URL survives a round trip through it
+  // rather than losing a field somebody downstream needs. `plugin` used to be
+  // the only one kept, so `group` was silently dropped by the one function a
+  // caller would use to store a configuration.
+  let assert Ok(config) =
+    url.parse(
+      "ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388?plugin=obfs&group=Tokyo",
+    )
+
+  assert url.extras(config) == [#("group", "Tokyo")]
+  assert string.contains(url.to_string(config), "group=Tokyo")
+
+  let assert Ok(again) = url.parse(url.to_string(config))
+  assert url.extras(again) == [#("group", "Tokyo")]
+}
+
+pub fn extras_survive_without_a_plugin_test() {
+  let assert Ok(config) =
+    url.parse(
+      "ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388?group=Tokyo&prefer=ipv6",
+    )
+
+  assert url.extras(config) == [#("group", "Tokyo"), #("prefer", "ipv6")]
+
+  let assert Ok(again) = url.parse(url.to_string(config))
+  assert url.extras(again) == [#("group", "Tokyo"), #("prefer", "ipv6")]
+}
+
+pub fn a_bare_flag_is_kept_as_an_empty_value_test() {
+  // Dropping it would lose a field just the same.
+  let assert Ok(config) =
+    url.parse("ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388?udp")
+
+  assert url.extras(config) == [#("udp", "")]
+  assert string.contains(url.to_string(config), "?udp")
+}
+
+pub fn extras_are_not_escaped_twice_test() {
+  // This module does not know what any of them mean, and decoding one would be
+  // a guess about it. `%3B` stays `%3B` rather than becoming `%253B`.
+  let assert Ok(config) =
+    url.parse("ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388?opts=a%3Bb")
+
+  assert url.extras(config) == [#("opts", "a%3Bb")]
+  assert string.contains(url.to_string(config), "opts=a%3Bb")
+}
+
+pub fn a_configuration_built_by_hand_can_carry_extras_test() {
+  let assert Ok(where) = address.parse("example.com:8388")
+
+  let config =
+    url.new(method.Aes256Gcm, "hunter2", where)
+    |> url.with_extras([#("group", "Tokyo")])
+
+  assert url.extras(config) == [#("group", "Tokyo")]
+  let assert Ok(again) = url.parse(url.to_string(config))
+  assert url.extras(again) == [#("group", "Tokyo")]
+}
+
 // --- writing one back out ----------------------------------------------------
 
 pub fn to_string_produces_the_canonical_sip002_form_test() {

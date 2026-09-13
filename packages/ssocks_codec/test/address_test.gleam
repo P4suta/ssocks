@@ -184,6 +184,45 @@ pub fn domain_length_is_measured_in_bytes_not_characters_test() {
   assert address.domain(repeat_text("あ", 85), 80) |> is_ok
 }
 
+// --- hosts that are not hosts ---------------------------------------------------
+
+pub fn a_bare_ipv6_address_is_not_a_domain_test() {
+  // `parse` used to fall back to "it must be a domain then", so this became a
+  // domain called `::1` and went on the wire as a name no resolver will ever
+  // answer. The brackets are how IPv6 says which colon is the port's.
+  assert address.parse("::1:80") == Error(address.MalformedDomain("::1"))
+  assert address.parse("[::1]:80") |> is_ok
+}
+
+pub fn a_port_written_twice_is_refused_test() {
+  assert address.parse("example.com:443:80")
+    == Error(address.MalformedDomain("example.com:443"))
+}
+
+pub fn a_host_with_a_space_or_a_control_character_is_refused_test() {
+  assert address.domain("exa mple.com", 80)
+    == Error(address.MalformedDomain("exa mple.com"))
+  assert address.domain("example.com\u{0}", 80)
+    == Error(address.MalformedDomain("example.com\u{0}"))
+}
+
+pub fn url_syntax_in_a_host_is_refused_test() {
+  use one <- list.each([
+    "exam/ple.com", "exam?ple.com", "exam#ple.com", "exam@ple.com",
+    "exam[ple.com", "exam]ple.com",
+  ])
+
+  assert address.domain(one, 80) == Error(address.MalformedDomain(one))
+}
+
+pub fn an_underscore_or_a_non_ascii_name_is_still_a_host_test() {
+  // Names with underscores are served every day, and internationalised names
+  // are real. A parser insisting on letters, digits and hyphens would refuse
+  // hosts that resolve perfectly well.
+  assert address.domain("my_service.internal", 80) |> is_ok
+  assert address.domain("日本語.example", 80) |> is_ok
+}
+
 // --- parsing text ------------------------------------------------------------
 
 pub fn a_host_and_port_pair_parses_test() {

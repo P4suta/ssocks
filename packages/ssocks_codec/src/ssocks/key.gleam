@@ -45,6 +45,24 @@ pub type KeyError {
   MalformedBase64
 }
 
+/// A sentence for a person.
+///
+/// `MalformedBase64` has nothing to say about what it was given, and that is
+/// deliberate: what was handed in is key material.
+pub fn explain(reason: KeyError) -> String {
+  case reason {
+    WrongKeyLength(expected:, actual:) ->
+      "this method needs a key of "
+      <> int.to_string(expected)
+      <> " bytes and this one is "
+      <> int.to_string(actual)
+      <> "."
+    MalformedBase64 ->
+      "the key is not base64 in either alphabet. It is not quoted here, "
+      <> "because it is key material; the caller still has what it passed."
+  }
+}
+
 /// Derive a key from a password, the way the deployed protocol does.
 ///
 /// This is OpenSSL's EVP_BytesToKey over MD5, chosen by Shadowsocks long ago

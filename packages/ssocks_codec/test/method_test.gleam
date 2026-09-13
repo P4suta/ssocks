@@ -97,6 +97,22 @@ pub fn a_refusal_preserves_the_text_exactly_as_it_was_supplied_test() {
     == Error(method.StreamCipherMethod("  AES-256-CFB  "))
 }
 
+pub fn no_encryption_is_its_own_refusal_test() {
+  // `none` and `plain` used to be classified as stream ciphers, and the
+  // sentence that came back said they carried no authentication — true, and
+  // beside the point, since they carry nothing at all. They exist so a SIP003
+  // plugin can be the whole of the transport security.
+  assert method.from_string("none") == Error(method.PlaintextMethod("none"))
+  assert method.from_string("plain") == Error(method.PlaintextMethod("plain"))
+  assert method.from_string("NONE") == Error(method.PlaintextMethod("NONE"))
+
+  let explained = method.explain(method.PlaintextMethod("none"))
+  assert string_contains(explained, "none")
+  assert string_contains(explained, "not encryption")
+  // The claim it used to make, and must not any more.
+  assert !string_contains(explained, "stream cipher")
+}
+
 pub fn every_refusal_explains_itself_in_a_sentence_test() {
   let explained = method.explain(method.StreamCipherMethod("aes-256-cfb"))
   assert explained != ""
@@ -108,6 +124,9 @@ pub fn every_refusal_explains_itself_in_a_sentence_test() {
 
   let explained = method.explain(method.UnknownMethod("nonsense"))
   assert string_contains(explained, "nonsense")
+
+  let explained = method.explain(method.PlaintextMethod("plain"))
+  assert string_contains(explained, "plain")
 
   let explained = method.explain(method.UnimplementedAeadMethod("aes-192-gcm"))
   assert string_contains(explained, "aes-192-gcm")

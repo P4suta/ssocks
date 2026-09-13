@@ -36,6 +36,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import ssocks/internal/aead
+import ssocks/internal/hex
 import ssocks/key.{type Key}
 import ssocks/method.{type Method}
 import ssocks/nonce.{type Nonce}
@@ -97,6 +98,50 @@ pub fn nonce_of(error: StreamError) -> Option(BitArray) {
   case error {
     AuthenticationFailed(nonce:, ..) -> Some(nonce)
     _ -> None
+  }
+}
+
+/// A sentence for a person.
+///
+/// Nothing here quotes a key, a salt or a payload. A framing failure is exactly
+/// when somebody reaches for the bytes to paste into a bug report, and the
+/// bytes are a credential's neighbours.
+pub fn explain(reason: StreamError) -> String {
+  case reason {
+    AuthenticationFailed(stage:, chunk:, nonce:, buffered: _) ->
+      "the "
+      <> case stage {
+        LengthHeader -> "length header"
+        Payload -> "payload"
+      }
+      <> " of chunk "
+      <> int.to_string(chunk)
+      <> " did not authenticate, under nonce "
+      <> hex.encode(nonce)
+      <> ". "
+      <> case chunk {
+        0 ->
+          "On chunk 0 this is almost always the password or the method; it "
+          <> "can also be a salt that has been used before."
+        _ ->
+          "Past chunk 0 the key is right and the framing has drifted — "
+          <> "compare this nonce with the other end's."
+      }
+
+    ChunkTooLarge(length) ->
+      "a chunk claims "
+      <> int.to_string(length)
+      <> " bytes and the protocol allows at most "
+      <> int.to_string(method.max_payload_size)
+      <> ". It authenticated, so this is a peer misbehaving rather than a "
+      <> "forgery."
+
+    BadSaltLength(expected:, actual:) ->
+      "a salt of "
+      <> int.to_string(actual)
+      <> " bytes was supplied where this method needs "
+      <> int.to_string(expected)
+      <> "."
   }
 }
 
@@ -247,8 +292,10 @@ pub fn salt(decoder: Decoder) -> Option(BitArray) {
 
 /// How many bytes the decoder is holding for a frame that is not yet complete.
 ///
-/// Always at most `max_buffered`. Useful when a connection has gone quiet and
-/// the question is whether the far end stopped mid-frame.
+/// Bounded by `max_buffered`, though nothing here compares the two: the bound
+/// is structural, because a frame is consumed the moment it is whole and the
+/// protocol caps a chunk at `method.max_payload_size`. Useful when a connection
+/// has gone quiet and the question is whether the far end stopped mid-frame.
 pub fn buffered(decoder: Decoder) -> Int {
   bit_array.byte_size(decoder.buffer)
 }

@@ -16,8 +16,8 @@
 //// 0020  a41f               chunk 0 length, sealed
 //// 0022  ee0b40…(16)        tag, nonce 000000000000000000000000
 ////                          -> length 21
-//// 0034  9c2ab1…(21)        chunk 0 payload, sealed
-//// 0049  774e02…(16)        tag, nonce 010000000000000000000000
+//// 0032  9c2ab1…(21)        chunk 0 payload, sealed
+//// 0047  774e02…(16)        tag, nonce 010000000000000000000000
 ////                          -> 21 bytes: example.org:443 then 4 bytes
 //// ```
 ////
