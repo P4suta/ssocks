@@ -15,7 +15,10 @@ something out; none of them requires guessing.
 
 ## 1. Say what failed, not that something did
 
-Every error type here has an `explain`, and none of them quote your credentials.
+Every error type here has an `explain`, and none of them quote your
+credentials. That was not always true — `client.explain` used to fall through to
+`string.inspect` for two of its five cases, printing a variant name where a
+sentence was promised.
 
 ```gleam
 case ssocks.send(connection, request) {
@@ -87,10 +90,11 @@ The first is needed once. It downloads the pinned shadowsocks-rust, checks its
 SHA-256, and puts it outside the repository; `SSOCKS_SSRUST_DIR` points at a
 copy you already have instead. The second downloads nothing.
 
-Four tests run: this client against a real `ssserver`, a real `sslocal` against
-this server, a real `sslocal -u` against this UDP relay, and `ssurl` reading and
-writing `ss://` both ways. If your change broke the wire format, one of them
-says so and says which layer.
+Six suites run: this client against a real `ssserver`, a real `sslocal` against
+this server, a real `sslocal -u` against this UDP relay, this UDP client against
+a real `ssserver -U`, SOCKS5 in both directions, and `ssurl` reading and writing
+`ss://` both ways. If your change broke a wire format, one of them says so and
+says which layer.
 
 ## 4. Feed the loop badly on purpose
 
@@ -163,4 +167,45 @@ server.new(session)
 `Probed(AuthenticationFailed(_))` is a wrong password. `Probed(MalformedHeader)`
 means the password is right and the first plaintext is not an address — check
 step 2. `Probed(Silent)` means nothing arrived at all before the handshake
-timeout.
+timeout. `Probed(Replayed(_))` means this salt has been seen before, which for
+one client usually means a recorded connection being sent again.
+
+`Probed(GuardUnavailable)` is the odd one out: it is not a prober at all, it is
+the replay filter failing to answer, and it drains because a guard that cannot
+answer has not said yes. If every connection reports it, the guard process has
+gone — `replay_guard.size` returns `Error(Nil)` rather than raising, so a
+supervisor can see that without being taken down by it.
+
+`Broke(Target(_))` and `Broke(Client(_))` say which socket failed on a relay
+that was working, and `Finished` follows either. Without them an ending is an
+ending: a client that hung up and a target that reset look the same in the
+event stream, and they have different causes.
+
+## When the proxy does not proxy
+
+`ssocks/local` has three places to stop, and they look different from each
+other. `local.watching` says which one you are in:
+
+| What you see | Where it stopped |
+| --- | --- |
+| nothing at all | The client never reached the port. Check the address: this listens on `127.0.0.1` by default, not on every interface. |
+| `Malformed(WrongVersion(_))` | Whatever connected is not speaking SOCKS5. A browser configured for an HTTP proxy rather than a SOCKS one arrives exactly like this. |
+| `Declined(NotAllowed)` | The client offered no authentication method this serves. Only `NO AUTHENTICATION` is offered, and it is the only one anything normally asks for. |
+| `Declined(CommandNotSupported)` | `BIND`, which is not implemented. |
+| `Requested(_)` and then nothing | SOCKS5 is fine and the Shadowsocks side is not. Go to step 1 with `ssocks/client`. |
+| `ServerUnreachable(_)` | The Shadowsocks server could not be reached at all. Nothing was sent, so this says nothing about the password. |
+| `Broke(_)` | The far end answered with something that is not a stream. Carries the `client.ClientError`, so `client.explain` says which. |
+
+A wrong password is the case worth naming, because it does not appear here. The
+proxy answers `Succeeded` as soon as the tunnel's socket is open, and
+Shadowsocks says nothing on connect — a server that cannot authenticate you
+simply never replies. So the symptom is a client that connects, sends, and waits:
+`Requested(_)` with no `Finished` until the idle timeout. That is
+`Framing` on chunk 0 wearing a different hat.
+
+For an association, `Dropped(_)` is per datagram and does not end anything:
+`Malformed(_)` is a client wrapping its payloads wrongly, `NotAuthentic(_)` is
+something arriving on the relay socket that this key cannot open — which on UDP
+is as much the ordinary noise of the internet as it is an attack — and
+`NoClientYet` means a reply arrived before any datagram had said where the
+client is.
