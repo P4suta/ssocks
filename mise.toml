@@ -122,17 +122,27 @@ run = "node ../../scripts/gleam-test.mjs erlang"
 [tasks."test-property"]
 description = "Deterministic property run with a fixed seed; reproduce a failure with the same seed"
 dir = "packages/ssocks_codec"
+# Every runtime this package claims, not the two it is convenient to run. Bun is
+# the one that matters most: it is the only one that selects the portable
+# ChaCha20, so a randomised run anywhere else never touches that code at all.
+# Measured at about sixteen seconds each.
 run = [
   "gleam run -m property_smoke --target erlang -- 10000 24301",
   "gleam run -m property_smoke --target javascript --runtime node -- 10000 24301",
+  "gleam run -m property_smoke --target javascript --runtime deno -- 10000 24301",
+  "gleam run -m property_smoke --target javascript --runtime bun -- 10000 24301",
 ]
 
 [tasks."test-fuzz"]
 description = "Feed adversarial and random bytes to every decoder; nothing may panic"
 dir = "packages/ssocks_codec"
+# All four, for the reason above. Measured at 39s on node, 23s on deno and 7s on
+# bun; the difference is the runtimes, not the work.
 run = [
   "gleam run -m fuzz_smoke --target erlang -- 50000 91117",
   "gleam run -m fuzz_smoke --target javascript --runtime node -- 50000 91117",
+  "gleam run -m fuzz_smoke --target javascript --runtime deno -- 50000 91117",
+  "gleam run -m fuzz_smoke --target javascript --runtime bun -- 50000 91117",
 ]
 
 [tasks."test-cross"]
@@ -140,6 +150,16 @@ description = "Erlang and JavaScript must produce byte-identical output for ever
 run = "node scripts/cross-target-vectors.mjs"
 
 # --- diagnosis --------------------------------------------------------------
+
+[tasks.backends]
+description = "Report which AEAD backend each runtime actually selects"
+dir = "packages/ssocks_codec"
+run = [
+  "gleam run -m environment_smoke --target erlang",
+  "gleam run -m environment_smoke --target javascript --runtime node",
+  "gleam run -m environment_smoke --target javascript --runtime deno",
+  "gleam run -m environment_smoke --target javascript --runtime bun",
+]
 
 # --- docs and lint ----------------------------------------------------------
 
@@ -163,9 +183,12 @@ run = "gleam docs build"
 description = "Spelling, TOML, workflows, YAML, secrets, and licence compliance"
 run = [
   "typos",
-  "taplo check mise.toml packages/ssocks_codec/gleam.toml packages/ssocks/gleam.toml",
+  # Every TOML in the repository, not the three somebody remembered. A
+  # malformed `.gitleaks.toml` used to be a secrets scanner silently running on
+  # defaults.
+  "taplo check mise.toml typos.toml .gitleaks.toml REUSE.toml packages/ssocks_codec/gleam.toml packages/ssocks/gleam.toml",
   "actionlint",
-  "yamllint --strict .github lefthook.yml",
+  "yamllint --strict .github lefthook.yml .yamllint.yml",
   "gitleaks dir . --no-banner --redact --verbose",
   "uvx --from \"reuse[charset-normalizer]==6.2.0\" reuse lint",
 ]
@@ -179,18 +202,13 @@ run = [
   "mise run test-property",
   "mise run test-fuzz",
   "mise run test-cross",
+  # In `check` because the portable ChaCha20 exists for what this prints. It
+  # had no gate at all, so a runtime quietly gaining or losing a native cipher
+  # would have changed which implementation every user of it runs, with nothing
+  # anywhere saying so.
+  "mise run backends",
   "mise run docs",
   "mise run lint",
-]
-
-[tasks.backends]
-description = "Report which AEAD backend each runtime actually selects"
-dir = "packages/ssocks_codec"
-run = [
-  "gleam run -m environment_smoke --target erlang",
-  "gleam run -m environment_smoke --target javascript --runtime node",
-  "gleam run -m environment_smoke --target javascript --runtime deno",
-  "gleam run -m environment_smoke --target javascript --runtime bun",
 ]
 
 [tasks."interop-fetch"]
@@ -203,6 +221,8 @@ run = [
   "mise run interop-tcp",
   "mise run interop-server",
   "mise run interop-udp",
+  "mise run interop-udp-client",
+  "mise run interop-socks5",
   "mise run interop-url",
 ]
 
@@ -217,6 +237,14 @@ run = "node scripts/server-interop.mjs"
 [tasks."interop-udp"]
 description = "Point a real sslocal at this UDP relay; the packet format has its own code"
 run = "node scripts/udp-interop.mjs"
+
+[tasks."interop-udp-client"]
+description = "Point this library's UDP client at a real ssserver; the direction the relay test cannot reach"
+run = "node scripts/udp-client-interop.mjs"
+
+[tasks."interop-socks5"]
+description = "SOCKS5 both ways: a real client against this proxy, and this client against a real sslocal"
+run = "node scripts/socks5-interop.mjs"
 
 [tasks."interop-url"]
 description = "Read and write ss:// URLs against shadowsocks-rust's own ssurl"

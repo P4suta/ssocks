@@ -19,7 +19,9 @@ concurrency:
 jobs:
   check:
     # Every gate lives in mise.toml so that what CI runs and what a developer
-    # runs cannot drift apart.
+    # runs cannot drift apart. The legs are listed rather than `mise run check`
+    # so the slow ones can be separate jobs; between them, the four jobs here
+    # cover every leg `check` has.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -38,6 +40,11 @@ jobs:
       - run: mise run build
       - run: mise run test
       - run: mise run test-cross
+      # Which cipher backend each runtime picks. The portable ChaCha20 exists
+      # because of what this prints, and until it ran here a runtime gaining or
+      # losing a native cipher would have changed the implementation every user
+      # of it runs with nothing anywhere saying so.
+      - run: mise run backends
 
   properties:
     # Longer randomised runs, on one platform only. The seeds are fixed, so a

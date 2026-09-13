@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# `lefthook.yml` runs `committed` on every commit message, and until this file
+# existed it ran with defaults that rejected every commit in this repository's
+# history — lowercase conventional subjects, subjects over fifty characters, and
+# bodies wrapped at eighty. The hook had never actually run: `lefthook install`
+# fails on a machine with a custom `core.hooksPath`, so nothing ever tried it.
+#
+# A gate that would refuse the history it is guarding is not a gate. These are
+# the rules this repository actually follows, measured from that history.
+
+style = "conventional"
+
+# Conventional subjects begin with a lowercase type. Capitalising them would
+# mean rewriting every commit here.
+subject_capitalized = false
+subject_not_punctuated = true
+
+# Long enough for `fix(udp): say so when stop ran out of time, and quote
+# nothing into PowerShell`, which is the longest subject written so far and
+# says more for being long.
+subject_length = 80
+
+# Bodies are prose, wrapped by hand near eighty.
+line_length = 80
+hard_line_length = 0
+
+# `imperative_subject` is off because the subjects here are usually noun
+# phrases naming what arrived — "the UDP relay, with a NAT table" — rather than
+# instructions to the reader.
+imperative_subject = false
+
+# The default list has neither `ci` nor `build`, both of which this repository
+# uses.
+allowed_types = [
+  "build",
+  "chore",
+  "ci",
+  "docs",
+  "feat",
+  "fix",
+  "perf",
+  "refactor",
+  "style",
+  "test",
+]
+
+no_fixup = true
+no_wip = true
+
+# GitHub writes its own subject for a merged pull request, and that subject is
+# not conventional. The hook never sees one — it runs on `commit-msg`, and
+# those commits are made on the server — so linting a range will name it and a
+# commit will not.
+merge_commit = true

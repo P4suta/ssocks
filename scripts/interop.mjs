@@ -18,11 +18,12 @@
 // looks. Nothing is downloaded from here.
 
 import { createServer, Socket } from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { quoted } from "./shell.mjs";
 import { locate } from "./ssrust.mjs";
 
 const METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
+const WINDOWS = process.platform === "win32";
 // Reaches the client through a shell, so it is quoted rather than restricted.
 // An earlier version of this file relied on the value having no spaces, and
 // when that assumption was first broken the password arrived split across two
@@ -37,6 +38,32 @@ function fail(message) {
 
 function serverBinary() {
   return locate("ssserver", fail);
+}
+
+/// Kill a child and everything it started.
+///
+/// The other two harnesses have had this since a Windows run passed every test
+/// and then hung for ever: killing a shell-spawned child there kills cmd.exe
+/// and orphans its grandchild, which keeps its pipes open and keeps this
+/// process alive. This one was spawning children the same way with a bare
+/// `child.kill()`.
+///
+/// On POSIX it needs `detached: true` on the spawn to work at all: without it
+/// the child shares this process's group, so `-child.pid` names no group of its
+/// own and the negative kill throws.
+function killTree(child) {
+  if (child.pid === undefined) return;
+  if (WINDOWS) {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
+  } else {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      child.kill("SIGKILL");
+    }
+  }
 }
 
 /// A TCP echo server. Whatever the Shadowsocks server relays to it comes back
@@ -68,7 +95,7 @@ async function startShadowsocks(binary, port, method) {
   const child = spawn(
     binary,
     ["-s", `127.0.0.1:${port}`, "-m", method, "-k", PASSWORD],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "pipe", "pipe"], detached: !WINDOWS },
   );
 
   const log = [];
@@ -85,7 +112,7 @@ async function startShadowsocks(binary, port, method) {
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  child.kill();
+  killTree(child);
   fail(`ssserver did not start listening on ${port}:\n${log.join("")}`);
 }
 
@@ -140,13 +167,13 @@ for (const method of METHODS) {
         method,
         PASSWORD,
       ]),
-      { cwd: "packages/ssocks", stdio: "inherit", shell: true },
+      { cwd: "packages/ssocks", stdio: "inherit", shell: true, detached: !WINDOWS },
     );
     run.on("error", (error) => fail(`could not run the client: ${error.message}`));
     run.on("close", resolve);
   });
 
-  child.kill();
+  killTree(child);
 
   if (status !== 0) {
     failed = true;
@@ -162,3 +189,9 @@ if (failed) {
 }
 
 console.log("\ninterop: every method round-tripped through shadowsocks-rust.");
+
+// Explicit, because the work is finished and the children this script started
+// keep the event loop open until every pipe is collected. A task that passes
+// and then never returns is a hung build, which is worse than a failing one —
+// the other harnesses have said so for a while and this one did not do it.
+process.exit(0);

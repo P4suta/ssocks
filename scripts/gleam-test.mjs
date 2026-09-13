@@ -9,8 +9,14 @@
 // rename — passes CI while asserting nothing. That is worse than a missing
 // gate, because the green tick claims coverage that does not exist.
 //
-// So the summary line is parsed and a positive count is demanded. A leg that
-// runs zero tests fails here.
+// So the summary line is parsed and a count is demanded. A positive one is not
+// enough on its own: a module that stops being discovered takes its tests with
+// it and the rest still report success, which is the same green tick claiming
+// the same coverage that is not there. Each package therefore states a floor,
+// and a leg that falls below it fails here.
+//
+// The floor is a minimum rather than an exact number, so adding a test does not
+// break the build; raising it when tests are added is the deliberate part.
 //
 // Deno needs a different invocation entirely: `gleam test --runtime deno`
 // cannot pass Deno permission flags, and gleeunit reads gleam.toml to discover
@@ -27,6 +33,11 @@ import { quoted } from "./shell.mjs";
 
 const runtime = process.argv[2];
 const RUNTIMES = ["erlang", "node", "deno", "bun"];
+
+// The smallest number of tests each package may run. Raise these when tests are
+// added; never lower one to make a red build green, because what that would
+// hide is exactly what this gate is for.
+const FLOORS = { ssocks_codec: 310, ssocks: 85 };
 
 if (!RUNTIMES.includes(runtime)) {
   console.error(`gleam-test: expected one of ${RUNTIMES.join(", ")}, got ${runtime ?? "nothing"}`);
@@ -101,4 +112,28 @@ if (passed === 0) {
   process.exit(1);
 }
 
-console.log(`gleam-test: ${runtime} ran ${passed} tests`);
+const name = packageName();
+const floor = FLOORS[name];
+
+if (floor === undefined) {
+  console.error(
+    `\ngleam-test: no test-count floor is recorded for \`${name}\`.\n` +
+      "  Add one to FLOORS in scripts/gleam-test.mjs, or a package could lose\n" +
+      "  every test it has and still report success.",
+  );
+  process.exit(1);
+}
+
+if (passed < floor) {
+  console.error(
+    `\ngleam-test: ${runtime} ran ${passed} tests and \`${name}\` has a floor of ${floor}.\n` +
+      "  Tests have gone missing rather than failed — a module that stops being\n" +
+      "  discovered takes its tests with it and the rest still report success.\n" +
+      "  Check for a renamed file, a `pub fn` that lost its `_test` suffix, or a\n" +
+      "  module that no longer compiles into the test build.\n" +
+      "  If tests were deliberately removed, lower the floor in the same commit.",
+  );
+  process.exit(1);
+}
+
+console.log(`gleam-test: ${runtime} ran ${passed} tests (floor ${floor})`);

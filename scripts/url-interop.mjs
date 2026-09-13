@@ -29,18 +29,33 @@
 // looks. Nothing is downloaded from here.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { quoted } from "./shell.mjs";
 import { locate } from "./ssrust.mjs";
+
+/// Set below, and removed by `clean` however this ends. Declared here so that
+/// `fail` can reach it from anywhere, including before it exists.
+let scratch;
 
 const TARGETS = [
   { name: "erlang", flags: ["--target", "erlang"] },
   { name: "node", flags: ["--target", "javascript", "--runtime", "node"] },
 ];
 
+/// Remove the scratch directory, wherever this stops.
+///
+/// The files in it are configurations holding passwords, written for `ssurl` to
+/// read. Leaving them in the system temp directory after every run is not a
+/// breach — they are this script's own test passwords — but it is a habit that
+/// makes one later.
+function clean() {
+  if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
+}
+
 function fail(message) {
+  clean();
   console.error(`url-interop: ${message}`);
   process.exit(1);
 }
@@ -119,7 +134,7 @@ function check(label, ours, theirs) {
 const reference = gleam(TARGETS[0], ["write"]);
 if (reference.length === 0) fail("url_interop write produced no cases");
 
-const scratch = mkdtempSync(join(tmpdir(), "ssocks-url-"));
+scratch = mkdtempSync(join(tmpdir(), "ssocks-url-"));
 
 /// One URL per case, written by ssurl rather than by us.
 const theirUrls = new Map();
@@ -179,6 +194,8 @@ for (const target of TARGETS) {
     if (written && read) console.log(`  ok   ${name}`);
   }
 }
+
+clean();
 
 if (failures > 0) {
   console.error(`\nurl-interop: ${failures} field(s) did not agree with ssurl.`);

@@ -29,7 +29,10 @@ import { locate } from "./ssrust.mjs";
 
 const METHODS = ["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"];
 const PASSWORD = "server-interop-password-1";
-const SIZES = [1, 100, 16_383, 16_384, 40_000];
+// The same list the client direction uses, so the README can state one set of
+// sizes rather than two. 16382, 16383 and 16384 bracket the chunk limit from
+// both sides.
+const SIZES = [1, 100, 16_382, 16_383, 16_384, 40_000];
 const WINDOWS = process.platform === "win32";
 
 function fail(message) {
@@ -43,11 +46,16 @@ function localBinary() {
 
 /// Kill a child and everything it started.
 ///
-/// The Gleam server is spawned through a shell so that Windows can find the
-/// mise shim, which means the child is cmd.exe and the Erlang node is its
-/// grandchild. Killing the shell leaves the node running with its pipes open,
-/// and this script then finishes its work and never exits — a CI task that
-/// hangs after passing.
+/// The Gleam node is spawned through a shell so that Windows can find the mise
+/// shim, which means the child is cmd.exe and the node is its grandchild.
+/// Killing the shell leaves the node running with its pipes open, and this
+/// script then finishes its work and never exits — a CI task that hangs after
+/// passing.
+///
+/// On POSIX this needs `detached: true` on every spawn to work at all. Without
+/// it the child is in this process's group, `-child.pid` names no group of its
+/// own, the negative kill throws, and the fallback reaches only the shell —
+/// so the branch below was doing nothing the whole time it appeared to.
 function killTree(child) {
   if (child.pid === undefined) return;
   if (WINDOWS) {
@@ -135,7 +143,12 @@ async function startServer(port, method) {
       method,
       PASSWORD,
     ]),
-    { cwd: "packages/ssocks", stdio: ["ignore", "pipe", "pipe"], shell: true },
+    {
+      cwd: "packages/ssocks",
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
+      detached: !WINDOWS,
+    },
   );
 
   child.stdout.on("data", (d) => log.push(d.toString()));
@@ -164,7 +177,7 @@ async function startLocal(binary, localPort, serverPort, echoPort, method) {
       "-k",
       PASSWORD,
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "pipe", "pipe"], detached: !WINDOWS },
   );
 
   child.stdout.on("data", (d) => log.push(d.toString()));

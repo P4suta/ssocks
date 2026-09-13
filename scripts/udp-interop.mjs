@@ -42,10 +42,16 @@ function localBinary() {
 
 /// Kill a child and everything it started.
 ///
-/// The Gleam relay is spawned through a shell so that Windows can find the mise
-/// shim, which makes the child cmd.exe and the Erlang node its grandchild.
-/// Killing only the shell leaves the node running with its pipes open, and this
-/// script then finishes its work and never exits.
+/// The Gleam node is spawned through a shell so that Windows can find the mise
+/// shim, which means the child is cmd.exe and the node is its grandchild.
+/// Killing the shell leaves the node running with its pipes open, and this
+/// script then finishes its work and never exits — a CI task that hangs after
+/// passing.
+///
+/// On POSIX this needs `detached: true` on every spawn to work at all. Without
+/// it the child is in this process's group, `-child.pid` names no group of its
+/// own, the negative kill throws, and the fallback reaches only the shell —
+/// so the branch below was doing nothing the whole time it appeared to.
 function killTree(child) {
   if (child.pid === undefined) return;
   if (WINDOWS) {
@@ -115,7 +121,12 @@ function startRelay(port, method) {
       method,
       PASSWORD,
     ]),
-    { cwd: "packages/ssocks", stdio: ["ignore", "pipe", "pipe"], shell: true },
+    {
+      cwd: "packages/ssocks",
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: true,
+      detached: !WINDOWS,
+    },
   );
 
   child.stdout.on("data", (d) => log.push(d.toString()));
@@ -144,7 +155,7 @@ function startLocal(binary, localPort, relayPort, echoPort, method) {
       "-k",
       PASSWORD,
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { stdio: ["ignore", "pipe", "pipe"], detached: !WINDOWS },
   );
 
   child.stdout.on("data", (d) => log.push(d.toString()));
