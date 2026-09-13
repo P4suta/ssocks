@@ -35,7 +35,27 @@ const PASSWORD = "server-interop-password-1";
 const SIZES = [1, 100, 16_382, 16_383, 16_384, 40_000];
 const WINDOWS = process.platform === "win32";
 
+/// Everything that has to be let go of, whatever happens.
+///
+/// `fail` calls `process.exit(1)`, which runs no `finally` and no `exit`
+/// handler that was not registered for it — so a child spawned before the
+/// failure would outlive this script. That mattered more once these spawns
+/// became `detached`: the child is its own process group leader now, so it is
+/// not even taken down with the shell.
+const cleanups = [];
+
+function cleanUp() {
+  while (cleanups.length > 0) {
+    try {
+      cleanups.pop()();
+    } catch {
+      // Already gone, which is the outcome this is asking for.
+    }
+  }
+}
+
 function fail(message) {
+  cleanUp();
   console.error(`server-interop: ${message}`);
   process.exit(1);
 }
@@ -153,6 +173,7 @@ async function startServer(port, method) {
 
   child.stdout.on("data", (d) => log.push(d.toString()));
   child.stderr.on("data", (d) => log.push(d.toString()));
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start the server: ${error.message}`));
 
   await waitFor(port, "the Gleam server", log, child);
@@ -182,6 +203,7 @@ async function startLocal(binary, localPort, serverPort, echoPort, method) {
 
   child.stdout.on("data", (d) => log.push(d.toString()));
   child.stderr.on("data", (d) => log.push(d.toString()));
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start sslocal: ${error.message}`));
 
   await waitFor(localPort, "sslocal", log, child);
@@ -227,6 +249,7 @@ function exchange(port, payload) {
 
 const binary = localBinary();
 const echo = await startEcho();
+cleanups.push(() => echo.server.close());
 let failed = false;
 
 console.log(`server-interop: echo on 127.0.0.1:${echo.port}`);
@@ -256,7 +279,7 @@ for (const method of METHODS) {
   killTree(server.child);
 }
 
-echo.server.close();
+cleanUp();
 
 if (failed) {
   console.error("\nserver-interop: a real client could not use this server.");

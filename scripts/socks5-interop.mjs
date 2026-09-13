@@ -34,7 +34,27 @@ const PASSWORD = "socks5-interop-password-1";
 const SIZES = [1, 100, 16_383, 16_384, 40_000];
 const WINDOWS = process.platform === "win32";
 
+/// Everything that has to be let go of, whatever happens.
+///
+/// `fail` calls `process.exit(1)`, which runs no `finally` and no `exit`
+/// handler that was not registered for it — so a child spawned before the
+/// failure would outlive this script. That mattered more once these spawns
+/// became `detached`: the child is its own process group leader now, so it is
+/// not even taken down with the shell.
+const cleanups = [];
+
+function cleanUp() {
+  while (cleanups.length > 0) {
+    try {
+      cleanups.pop()();
+    } catch {
+      // Already gone, which is the outcome this is asking for.
+    }
+  }
+}
+
 function fail(message) {
+  cleanUp();
   console.error(`socks5-interop: ${message}`);
   process.exit(1);
 }
@@ -132,6 +152,7 @@ async function startGleam(module, args, port, what) {
   );
 
   watch(child, log);
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start ${what}: ${error.message}`));
 
   await waitFor(port, what, log, child);
@@ -147,6 +168,7 @@ async function startServer(binary, port, method) {
   );
 
   watch(child, log);
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start ssserver: ${error.message}`));
 
   await waitFor(port, "ssserver", log, child);
@@ -176,6 +198,7 @@ async function startSocksLocal(binary, localPort, serverPort, method) {
   );
 
   watch(child, log);
+  cleanups.push(() => killTree(child));
   child.on("error", (error) => fail(`could not start sslocal: ${error.message}`));
 
   await waitFor(localPort, "sslocal", log, child);
@@ -269,6 +292,7 @@ function socks5Exchange(port, targetPort, payload) {
 const binary = locate("sslocal", fail);
 const serverBinary = locate("ssserver", fail);
 const echo = await startEcho();
+cleanups.push(() => echo.server.close());
 let failed = false;
 
 console.log(`socks5-interop: echo on 127.0.0.1:${echo.port}`);
@@ -348,7 +372,7 @@ for (const method of METHODS) {
   }
 }
 
-echo.server.close();
+cleanUp();
 
 if (failed) {
   console.error("\nsocks5-interop: this SOCKS5 does not interoperate.");

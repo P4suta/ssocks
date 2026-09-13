@@ -454,7 +454,7 @@ fn from_client(
 
         Ok(Nil) ->
           case session_for(state, host, port) {
-            Error(reason) -> {
+            Error(#(state, reason)) -> {
               state.settings.watching(Rejected(NoSocket(reason)))
               state
             }
@@ -509,7 +509,7 @@ fn session_for(
   state: State,
   host: glip.IpAddress,
   port: Int,
-) -> Result(#(State, Session), toss.Error) {
+) -> Result(#(State, Session), #(State, toss.Error)) {
   let name = client_key(host, port)
 
   case dict.get(state.sessions, name) {
@@ -531,7 +531,12 @@ fn session_for(
       // is commonly reached an order of magnitude below `max_sessions`. The
       // relay drops the packet instead, and says which packet and why.
       case toss.open(toss.new(port: 0)) {
-        Error(reason) -> Error(reason)
+        // The state, not just the reason: `make_room` has already closed
+        // sockets and taken their entries out, and throwing that away would
+        // leave the table holding closed sockets at its ceiling — every later
+        // packet from those clients failing as `Undeliverable`, and every new
+        // one closing entries that are already closed.
+        Error(reason) -> Error(#(state, reason))
         Ok(socket) -> {
           let _ = toss.receive_next_datagram_as_message(socket)
 

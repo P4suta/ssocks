@@ -90,6 +90,16 @@ pub type Socks5Error {
   UnknownCommand(byte: Int)
   UnknownReply(byte: Int)
   MalformedAddress(reason: address.DecodeError)
+  /// More methods were offered than the one-byte count can hold.
+  TooManyMethods(count: Int)
+  /// A value was handed to an encoder that does not fit the single byte the
+  /// wire gives it.
+  ///
+  /// `Authentication` and the reply codes name themselves, but `Other` holds a
+  /// raw byte and a caller can put anything in an `Int`. An encoder that
+  /// truncated it would put a different method on the wire from the one it was
+  /// asked for, which is the quietest possible way to be wrong.
+  NotAByte(value: Int)
   /// A relayed datagram asking to be reassembled. `ssocks/local` does not
   /// implement fragments and says so rather than delivering a piece of a
   /// payload as though it were the whole of one.
@@ -143,13 +153,28 @@ fn authentications(
 }
 
 /// Write a client's greeting.
-pub fn encode_greeting(offered: List(Authentication)) -> BitArray {
-  let bytes =
-    list.fold(offered, <<>>, fn(acc, one) {
-      <<acc:bits, { authentication_byte(one) }:8>>
-    })
-
-  <<version:8, { list.length(offered) }:8, bytes:bits>>
+///
+/// A `Result`, because two of the ways to get this wrong produce bytes this
+/// module's own `decode_greeting` refuses: an empty list is `NMETHODS = 0`,
+/// which is a greeting offering nothing, and more than 255 will not fit the
+/// count. An encoder whose output its own decoder rejects is worth catching
+/// here rather than on somebody else's socket.
+pub fn encode_greeting(
+  offered: List(Authentication),
+) -> Result(BitArray, Socks5Error) {
+  case list.length(offered) {
+    0 -> Error(NoMethodsOffered)
+    count if count > 255 -> Error(TooManyMethods(count))
+    count -> {
+      use bytes <- try(
+        list.try_fold(offered, <<>>, fn(acc, one) {
+          use byte <- try(authentication_byte(one))
+          Ok(<<acc:bits, byte:8>>)
+        }),
+      )
+      Ok(<<version:8, count:8, bytes:bits>>)
+    }
+  }
 }
 
 /// Read a server's choice of method.
@@ -164,8 +189,9 @@ pub fn decode_choice(
 }
 
 /// Write a server's choice of method.
-pub fn encode_choice(chosen: Authentication) -> BitArray {
-  <<version:8, { authentication_byte(chosen) }:8>>
+pub fn encode_choice(chosen: Authentication) -> Result(BitArray, Socks5Error) {
+  use byte <- try(authentication_byte(chosen))
+  Ok(<<version:8, byte:8>>)
 }
 
 fn authentication(byte: Int) -> Authentication {
@@ -176,11 +202,12 @@ fn authentication(byte: Int) -> Authentication {
   }
 }
 
-fn authentication_byte(one: Authentication) -> Int {
+fn authentication_byte(one: Authentication) -> Result(Int, Socks5Error) {
   case one {
-    NoAuthentication -> 0x00
-    NoneAcceptable -> 0xff
-    Other(byte) -> byte
+    NoAuthentication -> Ok(0x00)
+    NoneAcceptable -> Ok(0xff)
+    Other(byte) if byte >= 0 && byte <= 255 -> Ok(byte)
+    Other(byte) -> Error(NotAByte(byte))
   }
 }
 
@@ -363,6 +390,14 @@ pub fn explain(reason: Socks5Error) -> String {
       "reply code " <> int.to_string(byte) <> " is not one RFC 1928 defines."
     MalformedAddress(reason) ->
       "the target address is not one: " <> address.explain_decode(reason)
+    TooManyMethods(count) ->
+      "a greeting can offer at most 255 methods and this one offers "
+      <> int.to_string(count)
+      <> ". The count is one byte."
+    NotAByte(value) ->
+      int.to_string(value)
+      <> " does not fit the single byte the wire gives it. Truncating it would "
+      <> "put a different method on the wire from the one that was asked for."
     Fragmented(fragment) ->
       "the datagram is fragment "
       <> int.to_string(fragment)

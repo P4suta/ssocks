@@ -143,8 +143,11 @@ pub fn domain(name: String, port: Int) -> Result(Address, AddressError) {
 fn not_in_a_host(codepoint: UtfCodepoint) -> Bool {
   let value = string.utf_codepoint_to_int(codepoint)
 
+  // Everything at or below a space, and DEL together with the C1 controls
+  // above it. Stopping at DEL would have let U+0085 — which some parsers treat
+  // as a line break — into a host name.
   value <= 0x20
-  || value == 0x7f
+  || { value >= 0x7f && value <= 0x9f }
   || case value {
     // : / ? # @ [ ] and backslash.
     0x3a | 0x2f | 0x3f | 0x23 | 0x40 | 0x5b | 0x5d | 0x5c -> True

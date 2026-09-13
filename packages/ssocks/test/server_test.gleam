@@ -264,9 +264,14 @@ pub fn more_held_than_allowed_closes_the_connection_test() {
       to: "127.0.0.1:" <> int.to_string(target),
       within: 2000,
     )
-  let assert Ok(_) = client.send(connection, <<0:size(4096)>>)
+  let assert Ok(connection) = client.send(connection, <<0:size(4096)>>)
 
   let assert Ok(server.Overflowed(_)) = accounted(watched, 2000)
+
+  // The event is not the claim; the closure is. A server that reported the
+  // overflow and left the socket open would pass without this.
+  assert client.receive(connection, within: 2000)
+    == Error(client.ReadFailed(mug.Closed))
 
   client.close(connection)
   let assert Ok(Nil) = server.stop(listening)

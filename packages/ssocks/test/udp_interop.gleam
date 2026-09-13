@@ -22,6 +22,7 @@ import argv
 import gleam/erlang/process
 import gleam/int
 import gleam/io
+import gleam/list
 import gleam/string
 import ssocks/key
 import ssocks/method
@@ -37,7 +38,10 @@ pub fn main() -> Nil {
     other -> {
       io.println(
         "udp_interop: expected <relay_port> <method> <password>, got "
-        <> string.join(other, " "),
+        <> int.to_string(list.length(other))
+        <> " arguments. They are not quoted here: a usage error is "
+        <> "exactly when the arguments are in the wrong places, and one of "
+        <> "them is a password.",
       )
       halt(2)
     }

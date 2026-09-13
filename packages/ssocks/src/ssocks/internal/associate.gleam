@@ -90,6 +90,15 @@ pub type Rejection {
   NotAuthentic(reason: udp_client.UdpClientError)
   /// A reply arrived before any datagram had said where the client is.
   NoClientYet
+  /// A datagram arrived from somewhere that is not this association's client.
+  ///
+  /// The socket an association hands out is reachable by anything that can
+  /// reach the proxy, and nothing on this hop is authenticated — it is the
+  /// local one, and SOCKS5 has no per-datagram authentication to offer. So the
+  /// client is pinned by its first datagram and everything else is dropped.
+  /// Without that, one datagram from anywhere would redirect every subsequent
+  /// reply to whoever sent it.
+  NotTheClient
 }
 
 type Inbox {
@@ -235,23 +244,43 @@ fn from_client(
       state
     }
 
-    Ok(#(target, payload)) -> {
+    Ok(#(target, payload)) ->
       // Where the client is, learned rather than declared: RFC 1928 lets it
       // say, and in practice it says `0.0.0.0:0` because it is behind its own
-      // NAT and does not know.
-      let state = case host {
-        Error(Nil) -> state
-        Ok(host) -> State(..state, client: Some(#(host, port)))
-      }
-
-      case udp_client.send(state.sending, payload, to: target) {
-        Error(reason) -> {
-          process.send(state.events, Dropped(Undeliverable(reason)))
+      // NAT and does not know. Learned *once*: see `NotTheClient`.
+      case admit(state, host, port) {
+        Error(Nil) -> {
+          process.send(state.events, Dropped(NotTheClient))
           state
         }
-        Ok(Nil) -> state
+
+        Ok(state) ->
+          case udp_client.send(state.sending, payload, to: target) {
+            Error(reason) -> {
+              process.send(state.events, Dropped(Undeliverable(reason)))
+              state
+            }
+            Ok(Nil) -> state
+          }
       }
-    }
+  }
+}
+
+/// Take the first datagram's sender as the client, and only that one.
+fn admit(
+  state: State,
+  host: Result(glip.IpAddress, Nil),
+  port: Int,
+) -> Result(State, Nil) {
+  case host, state.client {
+    // No source address at all is nothing to pin or to check against.
+    Error(Nil), _ -> Error(Nil)
+    Ok(host), None -> Ok(State(..state, client: Some(#(host, port))))
+    Ok(host), Some(#(known, known_port)) ->
+      case host == known && port == known_port {
+        True -> Ok(state)
+        False -> Error(Nil)
+      }
   }
 }
 

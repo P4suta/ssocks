@@ -124,8 +124,9 @@ pub fn explain(reason: StreamError) -> String {
           "On chunk 0 this is almost always the password or the method; it "
           <> "can also be a salt that has been used before."
         _ ->
-          "Past chunk 0 the key is right and the framing has drifted — "
-          <> "compare this nonce with the other end's."
+          "Past chunk 0 the key is right. Either the framing has drifted or "
+          <> "this frame was altered in flight — compare this nonce with the "
+          <> "other end's, which separates the two."
       }
 
     ChunkTooLarge(length) ->

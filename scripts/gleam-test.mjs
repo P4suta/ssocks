@@ -34,10 +34,13 @@ import { quoted } from "./shell.mjs";
 const runtime = process.argv[2];
 const RUNTIMES = ["erlang", "node", "deno", "bun"];
 
-// The smallest number of tests each package may run. Raise these when tests are
-// added; never lower one to make a red build green, because what that would
-// hide is exactly what this gate is for.
-const FLOORS = { ssocks_codec: 310, ssocks: 85 };
+// The exact number of tests each package runs, treated as a floor.
+//
+// Exact rather than a round number underneath: a margin is a number of tests
+// that can go missing without anybody hearing about it, which is the failure
+// this gate exists for. Raise these in the commit that adds tests; never lower
+// one to make a red build green.
+const FLOORS = { ssocks_codec: 321, ssocks: 94 };
 
 if (!RUNTIMES.includes(runtime)) {
   console.error(`gleam-test: expected one of ${RUNTIMES.join(", ")}, got ${runtime ?? "nothing"}`);

@@ -22,6 +22,19 @@ fn bytes(text: String) -> BitArray {
   value
 }
 
+/// `encode_greeting` and `encode_choice` refuse values the wire cannot hold, so
+/// the tests that are about the bytes unwrap here and the ones that are about
+/// the refusals call them directly.
+fn greeting(offered: List(socks5.Authentication)) -> BitArray {
+  let assert Ok(written) = socks5.encode_greeting(offered)
+  written
+}
+
+fn choice(chosen: socks5.Authentication) -> BitArray {
+  let assert Ok(written) = socks5.encode_choice(chosen)
+  written
+}
+
 fn target(text: String) -> address.Address {
   let assert Ok(where) = address.parse(text)
   where
@@ -30,21 +43,36 @@ fn target(text: String) -> address.Address {
 // --- the greeting ---------------------------------------------------------------
 
 pub fn a_greeting_is_a_version_a_count_and_the_methods_test() {
-  assert socks5.encode_greeting([socks5.NoAuthentication]) == bytes("050100")
+  assert greeting([socks5.NoAuthentication]) == bytes("050100")
 
-  assert socks5.encode_greeting([socks5.NoAuthentication, socks5.Other(2)])
+  assert greeting([socks5.NoAuthentication, socks5.Other(2)])
     == bytes("05020002")
+}
+
+pub fn a_greeting_that_cannot_be_written_is_refused_test() {
+  // An encoder whose output its own decoder rejects is worth catching here
+  // rather than on somebody else's socket. `NMETHODS = 0` is exactly that.
+  assert socks5.encode_greeting([]) == Error(socks5.NoMethodsOffered)
+
+  let many = list.repeat(socks5.NoAuthentication, 256)
+  assert socks5.encode_greeting(many) == Error(socks5.TooManyMethods(256))
+
+  // `Other` holds a raw byte and a caller can put anything in an `Int`.
+  // Truncating would put a different method on the wire than was asked for.
+  assert socks5.encode_greeting([socks5.Other(300)])
+    == Error(socks5.NotAByte(300))
+  assert socks5.encode_choice(socks5.Other(-1)) == Error(socks5.NotAByte(-1))
 }
 
 pub fn a_greeting_round_trips_test() {
   let offered = [socks5.NoAuthentication, socks5.Other(0x02)]
 
-  assert socks5.decode_greeting(socks5.encode_greeting(offered))
+  assert socks5.decode_greeting(greeting(offered))
     == Ok(socks5.Complete(offered, <<>>))
 }
 
 pub fn a_greeting_keeps_what_followed_it_test() {
-  let written = socks5.encode_greeting([socks5.NoAuthentication])
+  let written = greeting([socks5.NoAuthentication])
 
   assert socks5.decode_greeting(<<written:bits, "after":utf8>>)
     == Ok(socks5.Complete([socks5.NoAuthentication], <<"after":utf8>>))
@@ -53,8 +81,7 @@ pub fn a_greeting_keeps_what_followed_it_test() {
 pub fn every_prefix_of_a_greeting_asks_for_more_test() {
   // A prefix of a valid greeting is a valid greeting that has not finished.
   // Treating one as an error closes clients that were merely slow.
-  let written =
-    socks5.encode_greeting([socks5.NoAuthentication, socks5.Other(2)])
+  let written = greeting([socks5.NoAuthentication, socks5.Other(2)])
 
   use prefix <- list.each(short_of(written))
   let assert Ok(socks5.NeedMoreBytes(_)) = socks5.decode_greeting(prefix)
@@ -81,8 +108,8 @@ pub fn a_greeting_offering_nothing_is_refused_test() {
 }
 
 pub fn a_choice_round_trips_test() {
-  assert socks5.encode_choice(socks5.NoAuthentication) == bytes("0500")
-  assert socks5.encode_choice(socks5.NoneAcceptable) == bytes("05ff")
+  assert choice(socks5.NoAuthentication) == bytes("0500")
+  assert choice(socks5.NoneAcceptable) == bytes("05ff")
 
   assert socks5.decode_choice(bytes("0500"))
     == Ok(socks5.Complete(socks5.NoAuthentication, <<>>))
@@ -246,6 +273,8 @@ pub fn every_refusal_has_a_sentence_of_its_own_test() {
     socks5.UnknownCommand(9),
     socks5.UnknownReply(9),
     socks5.MalformedAddress(address.UnknownAddressType(9)),
+    socks5.TooManyMethods(256),
+    socks5.NotAByte(300),
     socks5.Fragmented(2),
     socks5.TooShort(needed_at_least: 10, actual: 3),
   ])

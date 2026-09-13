@@ -87,9 +87,9 @@ fn attempt(
     |> replace_error("could not reach the SOCKS5 port"),
   )
 
+  let assert Ok(greeting) = socks5.encode_greeting([socks5.NoAuthentication])
   use _ <- try(
-    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
-    |> replace_error("could not send the greeting"),
+    mug.send(socket, greeting) |> replace_error("could not send the greeting"),
   )
 
   use #(chosen, _) <- try(read(socket, <<>>, socks5.decode_choice))

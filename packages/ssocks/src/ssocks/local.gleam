@@ -67,6 +67,13 @@ pub const default_max_connections = 10_000
 /// How much may be queued for the server before the client stops being read.
 pub const default_max_outstanding_bytes = 262_144
 
+/// How much a client may send before its tunnel has been reached.
+///
+/// The same window and the same reasoning as `ssocks/server`: the tunnel is
+/// reached inside `with_connect_timeout`, so without a bound this is "as much
+/// as the client can push in ten seconds", held in one process's memory.
+pub const default_max_pending_bytes = 262_144
+
 /// Things worth knowing about, for logs and for tests.
 ///
 /// The callback runs inside the connection's own process, so it should be
@@ -98,6 +105,9 @@ pub type Event {
   Refused
   /// Closed for having said nothing for `with_idle_timeout`.
   Idled
+  /// Closed for sending more before its tunnel was reached than
+  /// `with_max_pending_bytes` allows.
+  Overflowed(held: Int)
   Finished
 }
 
@@ -110,6 +120,7 @@ pub opaque type Builder {
     idle_timeout: Int,
     max_connections: Int,
     max_outstanding_bytes: Int,
+    max_pending_bytes: Int,
     /// Filled in by `start`; a builder never carries one.
     counting: Option(Tally),
     watching: fn(Event) -> Nil,
@@ -147,6 +158,7 @@ pub fn new(config: url.Config) -> Builder {
     idle_timeout: default_idle_timeout,
     max_connections: default_max_connections,
     max_outstanding_bytes: default_max_outstanding_bytes,
+    max_pending_bytes: default_max_pending_bytes,
     counting: None,
     watching: fn(_) { Nil },
   )
@@ -182,6 +194,11 @@ pub fn with_max_connections(builder: Builder, connections: Int) -> Builder {
 /// How much may be queued for the server before the client stops being read.
 pub fn with_max_outstanding_bytes(builder: Builder, bytes: Int) -> Builder {
   Builder(..builder, max_outstanding_bytes: bytes)
+}
+
+/// How much a client may send before its tunnel has been reached.
+pub fn with_max_pending_bytes(builder: Builder, bytes: Int) -> Builder {
+  Builder(..builder, max_pending_bytes: bytes)
 }
 
 /// Watch what the proxy is doing.
@@ -335,6 +352,8 @@ type Session {
     association: Option(Subject(associate.Command)),
     /// Payload waiting for the server to be reached, newest first.
     held: List(BitArray),
+    /// What `held` adds up to, so the cap costs no walking of the list.
+    held_bytes: Int,
     outstanding: Int,
     last_activity: Int,
     accepted: Bool,
@@ -385,6 +404,7 @@ fn open(settings: Builder) -> #(Session, Option(process.Selector(Notice))) {
       tunnel: None,
       association: None,
       held: [],
+      held_bytes: 0,
       outstanding: 0,
       last_activity: clock.now_ms(),
       accepted:,
@@ -428,9 +448,15 @@ fn touch(state: Session) -> Session {
 }
 
 fn idle(state: Session) -> glisten.Next(Session, glisten.Message(Notice)) {
-  case state.settings.idle_timeout {
-    0 -> glisten.continue(state)
-    milliseconds -> {
+  case state.stage, state.settings.idle_timeout {
+    // RFC 1928 keeps this connection open and silent for the life of an
+    // association, and `touch` only runs for events this handler sees — a
+    // datagram relayed by `ssocks/internal/associate` is not one. So the timer
+    // would have closed a working association every five minutes. Its lifetime
+    // is the TCP connection's, and the TCP connection closing is what ends it.
+    Holding, _ -> glisten.continue(state)
+    _, 0 -> glisten.continue(state)
+    _, milliseconds -> {
       let quiet = clock.now_ms() - state.last_activity
       case quiet >= milliseconds {
         True -> {
@@ -484,12 +510,14 @@ fn greet(
           // Answered rather than dropped: this is a local client that got the
           // configuration wrong, not a prober. Telling it why is the point.
           state.settings.watching(Declined(socks5.NotAllowed))
-          let _ = say(connection, socks5.encode_choice(socks5.NoneAcceptable))
+          let assert Ok(refusal) = socks5.encode_choice(socks5.NoneAcceptable)
+          let _ = say(connection, refusal)
           finish(state)
         }
 
-        True ->
-          case say(connection, socks5.encode_choice(socks5.NoAuthentication)) {
+        True -> {
+          let assert Ok(chosen) = socks5.encode_choice(socks5.NoAuthentication)
+          case say(connection, chosen) {
             Error(Nil) -> finish(state)
             Ok(Nil) ->
               // Whatever followed the greeting is the start of the request,
@@ -499,6 +527,7 @@ fn greet(
                 connection,
               )
           }
+        }
       }
   }
 }
@@ -616,11 +645,29 @@ fn from_server(
         Error(Nil) -> finish(state)
         Ok(Nil) -> {
           tunnel.flush(commands, state.held)
+
+          // Nothing held means the client is waiting for the far end to speak
+          // first, which plenty of protocols do — SSH and SMTP send a banner
+          // before anything is asked of them. The salt and the target address
+          // are held back until the first write, so with no write there is no
+          // request, and both ends would wait for each other for ever. An
+          // empty write flushes exactly that and adds no payload.
+          //
+          // Only when nothing is held: the point of holding the header back is
+          // that it travels with the first payload rather than as a lone short
+          // packet at the head of every connection, and that is still true for
+          // every client that speaks first.
+          case state.held {
+            [] -> process.send(commands, tunnel.Write(<<>>))
+            _ -> Nil
+          }
+
           glisten.continue(
             Session(
               ..state,
               tunnel: Some(commands),
               held: [],
+              held_bytes: 0,
               outstanding: state.outstanding,
             ),
           )
@@ -689,14 +736,25 @@ fn hold(
 ) -> glisten.Next(Session, glisten.Message(Notice)) {
   case bit_array.byte_size(payload) {
     0 -> glisten.continue(state)
-    size ->
-      glisten.continue(
-        Session(
-          ..state,
-          held: [payload, ..state.held],
-          outstanding: state.outstanding + size,
-        ),
-      )
+    size -> {
+      let held_bytes = state.held_bytes + size
+
+      case held_bytes > state.settings.max_pending_bytes {
+        True -> {
+          state.settings.watching(Overflowed(held_bytes))
+          finish(state)
+        }
+        False ->
+          glisten.continue(
+            Session(
+              ..state,
+              held: [payload, ..state.held],
+              held_bytes:,
+              outstanding: state.outstanding + size,
+            ),
+          )
+      }
+    }
   }
 }
 

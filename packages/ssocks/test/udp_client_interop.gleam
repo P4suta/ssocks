@@ -19,7 +19,6 @@ import argv
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/string
 import ssocks/address
 import ssocks/key
 import ssocks/method
@@ -37,7 +36,10 @@ pub fn main() -> Nil {
       io.println(
         "udp_client_interop: expected <server_port> <echo_port> <method> "
         <> "<password>, got "
-        <> string.join(other, " "),
+        <> int.to_string(list.length(other))
+        <> " arguments. They are not quoted here: a usage error is "
+        <> "exactly when the arguments are in the wrong places, and one of "
+        <> "them is a password.",
       )
       halt(2)
     }

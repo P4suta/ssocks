@@ -23,6 +23,7 @@ import glip
 import glisten
 import mug
 import ssocks/address
+import ssocks/internal/associate
 import ssocks/key
 import ssocks/local
 import ssocks/method
@@ -72,6 +73,13 @@ fn tear_down(listening: server.Server, proxy: local.Proxy) -> Nil {
   Nil
 }
 
+/// The SOCKS5 encoders refuse values the wire cannot hold; these are literals
+/// that cannot.
+fn greeting(offered: List(socks5.Authentication)) -> BitArray {
+  let assert Ok(written) = socks5.encode_greeting(offered)
+  written
+}
+
 fn connect(port: Int) -> mug.Socket {
   let assert Ok(socket) =
     mug.new("127.0.0.1", port: port)
@@ -101,8 +109,7 @@ fn through(port: Int, target: String) -> mug.Socket {
   let socket = connect(port)
   let assert Ok(where) = address.parse(target)
 
-  let assert Ok(_) =
-    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  let assert Ok(_) = mug.send(socket, greeting([socks5.NoAuthentication]))
   let #(chosen, _) = until(socket, <<>>, socks5.decode_choice)
   assert chosen == socks5.NoAuthentication
 
@@ -155,7 +162,7 @@ pub fn a_greeting_and_a_request_arriving_one_byte_at_a_time_still_work_test() {
   let socket = connect(local.port(proxy))
   let assert Ok(where) = address.parse("127.0.0.1:" <> int.to_string(target))
 
-  dribble(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  dribble(socket, greeting([socks5.NoAuthentication]))
   let #(chosen, _) = until(socket, <<>>, socks5.decode_choice)
   assert chosen == socks5.NoAuthentication
 
@@ -181,7 +188,7 @@ pub fn a_client_that_writes_its_request_with_its_greeting_is_served_test() {
 
   let assert Ok(_) =
     mug.send(socket, <<
-      { socks5.encode_greeting([socks5.NoAuthentication]) }:bits,
+      { greeting([socks5.NoAuthentication]) }:bits,
       { socks5.encode_request(socks5.Connect, where) }:bits,
     >>)
 
@@ -192,6 +199,42 @@ pub fn a_client_that_writes_its_request_with_its_greeting_is_served_test() {
 
   let _ = mug.shutdown(socket)
   tear_down(listening, proxy)
+}
+
+pub fn a_target_that_speaks_first_is_reached_test() {
+  // The salt and the target address are held back until the first write, so a
+  // client that waits for a banner — SSH, SMTP, plenty of others — would have
+  // waited for a target that had never been asked for, while the target waited
+  // for a client it had never heard of. Nothing errors; both ends sit there.
+  let banner = banner_target(<<"220 ready\r\n":utf8>>)
+  let #(listening, proxy, _) = stack(plain)
+
+  let socket = through(local.port(proxy), "127.0.0.1:" <> int.to_string(banner))
+
+  // Not a byte sent past the SOCKS5 request, and the banner still arrives.
+  assert gather(socket, <<>>, 11) == <<"220 ready\r\n":utf8>>
+
+  let _ = mug.shutdown(socket)
+  tear_down(listening, proxy)
+}
+
+/// A target that speaks before it is spoken to.
+fn banner_target(banner: BitArray) -> Int {
+  let name = process.new_name("ssocks_local_banner")
+
+  let assert Ok(_) =
+    glisten.new(
+      fn(connection) {
+        let assert Ok(_) =
+          glisten.send(connection, bytes_tree.from_bit_array(banner))
+        #(Nil, option.None)
+      },
+      fn(state, _, _) { glisten.continue(state) },
+    )
+    |> glisten.with_listener_name(name)
+    |> glisten.start(0)
+
+  glisten.get_server_info(name, 1000).port
 }
 
 // --- UDP ASSOCIATE --------------------------------------------------------------------
@@ -218,8 +261,7 @@ pub fn an_association_relays_datagrams_both_ways_test() {
     |> local.start(0)
 
   let socket = connect(local.port(proxy))
-  let assert Ok(_) =
-    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  let assert Ok(_) = mug.send(socket, greeting([socks5.NoAuthentication]))
   let #(_, _) = until(socket, <<>>, socks5.decode_choice)
 
   // `0.0.0.0:0` is what clients actually send: they are behind their own NAT
@@ -277,8 +319,7 @@ pub fn an_association_on_localhost_is_bound_to_loopback_test() {
     local.new(config_for(port)) |> local.bind("localhost") |> local.start(0)
 
   let socket = connect(local.port(proxy))
-  let assert Ok(_) =
-    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  let assert Ok(_) = mug.send(socket, greeting([socks5.NoAuthentication]))
   let #(_, _) = until(socket, <<>>, socks5.decode_choice)
 
   let assert Ok(unknown) = address.parse("0.0.0.0:0")
@@ -312,6 +353,130 @@ pub fn an_association_on_localhost_is_bound_to_loopback_test() {
   let assert Ok(Nil) = server.stop(listening)
 }
 
+pub fn an_association_outlives_the_idle_timer_test() {
+  // RFC 1928 keeps this connection open and silent for the life of an
+  // association, so the idle timer never sees anything to refresh it — and a
+  // working association was being closed every five minutes because of it.
+  let answering = udp_echo.start()
+  let assert Ok(listening) =
+    server.new(session()) |> server.bind("127.0.0.1") |> server.start(0)
+  let port = server.port(listening)
+  let assert Ok(relaying) =
+    udp.relay(session()) |> udp.bind("127.0.0.1") |> udp.start(port)
+
+  let assert Ok(proxy) =
+    local.new(config_for(port))
+    |> local.with_idle_timeout(200)
+    |> local.start(0)
+
+  let #(socket, where) = associate(local.port(proxy))
+  let assert Ok(sending) = toss.open(toss.new(port: 0))
+  let assert Ok(ip) = glip.parse_ip(address.host(where))
+  let target = target_at(answering)
+
+  // Well past the idle timeout, with the control connection silent throughout.
+  process.sleep(600)
+
+  let assert Ok(Nil) =
+    toss.send_to(
+      sending,
+      ip,
+      address.port(where),
+      socks5.encode_datagram(target, <<"still here":utf8>>),
+    )
+  let assert Ok(#(_, _, back)) =
+    toss.receive(sending, max_length: 65_535, timeout_milliseconds: 5000)
+
+  assert socks5.decode_datagram(back) == Ok(#(target, <<"still here":utf8>>))
+
+  toss.close(sending)
+  let _ = mug.shutdown(socket)
+  let assert Ok(Nil) = local.stop(proxy)
+  let assert Ok(Nil) = udp.stop(relaying)
+  let assert Ok(Nil) = server.stop(listening)
+}
+
+pub fn an_association_answers_only_the_client_that_claimed_it_test() {
+  // The socket an association hands out is reachable by anything that can
+  // reach the proxy, and this hop has no authentication to offer. Without
+  // pinning, one datagram from anywhere would redirect every later reply to
+  // whoever sent it.
+  let answering = udp_echo.start()
+  let assert Ok(listening) =
+    server.new(session()) |> server.bind("127.0.0.1") |> server.start(0)
+  let port = server.port(listening)
+  let assert Ok(relaying) =
+    udp.relay(session()) |> udp.bind("127.0.0.1") |> udp.start(port)
+
+  let watched = process.new_subject()
+  let assert Ok(proxy) =
+    local.new(config_for(port))
+    |> local.watching(fn(event) { process.send(watched, event) })
+    |> local.start(0)
+
+  let #(socket, where) = associate(local.port(proxy))
+  let assert Ok(ip) = glip.parse_ip(address.host(where))
+  let target = target_at(answering)
+  let wrapped = socks5.encode_datagram(target, <<"mine":utf8>>)
+
+  // The first sender is the client from here on.
+  let assert Ok(mine) = toss.open(toss.new(port: 0))
+  let assert Ok(Nil) = toss.send_to(mine, ip, address.port(where), wrapped)
+  let assert Ok(#(_, _, back)) =
+    toss.receive(mine, max_length: 65_535, timeout_milliseconds: 5000)
+  assert socks5.decode_datagram(back) == Ok(#(target, <<"mine":utf8>>))
+
+  // Somebody else, with a perfectly well-formed datagram.
+  let assert Ok(theirs) = toss.open(toss.new(port: 0))
+  let assert Ok(Nil) = toss.send_to(theirs, ip, address.port(where), wrapped)
+
+  assert dropped(watched) == Ok(local.Dropped(associate.NotTheClient))
+
+  // And nothing comes back to them.
+  assert toss.receive(theirs, max_length: 65_535, timeout_milliseconds: 500)
+    |> is_error
+
+  toss.close(mine)
+  toss.close(theirs)
+  let _ = mug.shutdown(socket)
+  let assert Ok(Nil) = local.stop(proxy)
+  let assert Ok(Nil) = udp.stop(relaying)
+  let assert Ok(Nil) = server.stop(listening)
+}
+
+/// The next dropped datagram, skipping the setting up around it.
+fn dropped(watched: Subject(local.Event)) -> Result(local.Event, Nil) {
+  case process.receive(watched, 3000) {
+    Ok(local.Dropped(_) as event) -> Ok(event)
+    Ok(_) -> dropped(watched)
+    Error(Nil) -> Error(Nil)
+  }
+}
+
+fn is_error(result: Result(a, b)) -> Bool {
+  case result {
+    Error(_) -> True
+    Ok(_) -> False
+  }
+}
+
+/// Greet, ask for an association, and come back with the control socket and
+/// the address the client is told to send datagrams to.
+fn associate(port: Int) -> #(mug.Socket, address.Address) {
+  let socket = connect(port)
+
+  let assert Ok(_) = mug.send(socket, greeting([socks5.NoAuthentication]))
+  let #(_, _) = until(socket, <<>>, socks5.decode_choice)
+
+  let assert Ok(unknown) = address.parse("0.0.0.0:0")
+  let assert Ok(_) =
+    mug.send(socket, socks5.encode_request(socks5.Associate, unknown))
+  let #(#(outcome, where), _) = until(socket, <<>>, socks5.decode_reply)
+  assert outcome == socks5.Succeeded
+
+  #(socket, where)
+}
+
 // --- what it will not do ------------------------------------------------------------
 
 pub fn bind_is_answered_with_command_not_supported_test() {
@@ -322,8 +487,7 @@ pub fn bind_is_answered_with_command_not_supported_test() {
   let socket = connect(local.port(proxy))
   let assert Ok(where) = address.parse("1.2.3.4:80")
 
-  let assert Ok(_) =
-    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  let assert Ok(_) = mug.send(socket, greeting([socks5.NoAuthentication]))
   let #(_, _) = until(socket, <<>>, socks5.decode_choice)
 
   let assert Ok(_) = mug.send(socket, socks5.encode_request(socks5.Bind, where))
@@ -341,8 +505,7 @@ pub fn a_client_offering_no_method_we_have_is_told_so_test() {
   let #(listening, proxy, watched) = stack(plain)
 
   let socket = connect(local.port(proxy))
-  let assert Ok(_) =
-    mug.send(socket, socks5.encode_greeting([socks5.Other(0x02)]))
+  let assert Ok(_) = mug.send(socket, greeting([socks5.Other(0x02)]))
 
   let #(chosen, _) = until(socket, <<>>, socks5.decode_choice)
   assert chosen == socks5.NoneAcceptable
@@ -382,8 +545,7 @@ pub fn a_server_that_is_not_there_is_reported_as_unreachable_test() {
   let socket = connect(local.port(proxy))
   let assert Ok(where) = address.parse("1.2.3.4:80")
 
-  let assert Ok(_) =
-    mug.send(socket, socks5.encode_greeting([socks5.NoAuthentication]))
+  let assert Ok(_) = mug.send(socket, greeting([socks5.NoAuthentication]))
   let #(_, _) = until(socket, <<>>, socks5.decode_choice)
   let assert Ok(_) =
     mug.send(socket, socks5.encode_request(socks5.Connect, where))
