@@ -63,7 +63,8 @@ fn describe(event: udp.Event) -> String {
       "returned " <> int.to_string(bytes) <> " from " <> string.inspect(from)
     udp.Rejected(reason) -> "rejected " <> string.inspect(reason)
     udp.SessionOpened(count) -> "opened, now " <> int.to_string(count)
-    udp.SessionExpired(count) -> "expired, now " <> int.to_string(count)
+    udp.SessionExpired(expired, count) ->
+      "expired " <> int.to_string(expired) <> ", now " <> int.to_string(count)
     udp.SessionEvicted(count) -> "evicted, now " <> int.to_string(count)
   }
 }

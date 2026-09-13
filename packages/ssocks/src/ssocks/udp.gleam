@@ -76,7 +76,19 @@ pub type Rejection {
   NotAuthentic(reason: datagram.DatagramError)
   Replayed(reason: replay.ReplayError)
   /// The target could not be written to.
-  Undeliverable
+  Undeliverable(reason: toss.Error)
+  /// The reply could not be written back to the client. Its own case because
+  /// the direction matters: everything worked except the last hop, and that is
+  /// a different thing to look at.
+  Unanswerable(reason: toss.Error)
+  /// The replay filter could not answer, so the packet was dropped. A guard
+  /// that cannot answer has not said yes, and forwarding anyway would drop the
+  /// guarantee exactly when it is least able to be checked.
+  GuardUnavailable
+  /// A socket for this client could not be opened, so there was nothing to
+  /// forward on. Almost always the process or system file descriptor limit,
+  /// which is reached long before `max_sessions` on a default configuration.
+  NoSocket(reason: toss.Error)
 }
 
 /// Things worth knowing about, for logs and for tests.
@@ -89,7 +101,11 @@ pub type Event {
   /// A client that had no entry now has one.
   SessionOpened(sessions: Int)
   /// Dropped for having gone quiet.
-  SessionExpired(sessions: Int)
+  ///
+  /// `expired` is how many went in this sweep and `sessions` how many are left.
+  /// The count used to be only the second, which meant a caller watching this
+  /// could draw the table's size and never how fast it was turning over.
+  SessionExpired(expired: Int, sessions: Int)
   /// Dropped to make room, which means the ceiling has been reached and
   /// somebody is probably forging source addresses.
   SessionEvicted(sessions: Int)
@@ -125,6 +141,13 @@ pub type StartError {
   CouldNotGuard
   /// The relay process did not report back in time.
   DidNotStart
+  /// `bind` was given something that is not an address this machine could
+  /// listen on. Refused rather than ignored: the fallback is every interface,
+  /// and a typo would publish a relay the operator meant to keep on one
+  /// address.
+  BadInterface(interface: String)
+  /// The socket opened and would not say which port it got.
+  NoPort
 }
 
 /// A relay for one key, with the safe defaults.
@@ -169,7 +192,19 @@ pub fn with_max_sessions(builder: Builder, sessions: Int) -> Builder {
   Builder(..builder, max_sessions: sessions)
 }
 
+/// How long a packet may wait for the replay filter to answer.
+///
+/// The filter is one process shared by every packet and, when it is shared with
+/// a TCP server, by every connection too. A busy one is the reason this is not
+/// the same number as the other timeouts here.
+pub fn with_guard_timeout(builder: Builder, milliseconds: Int) -> Builder {
+  Builder(..builder, guard_timeout: milliseconds)
+}
+
 /// Which interface to listen on. Defaults to all of them.
+///
+/// An interface this machine has no address for is refused by `start` with
+/// `BadInterface` rather than quietly becoming every interface.
 pub fn bind(builder: Builder, interface: String) -> Builder {
   Builder(..builder, interface: Some(interface))
 }
@@ -299,6 +334,8 @@ type State {
     sessions: Dict(String, Session),
     /// Which client a reply socket belongs to.
     owners: Dict(toss.Socket, String),
+    /// Clients queued for eviction, oldest first. See `make_room`.
+    evictable: List(String),
   )
 }
 
@@ -307,33 +344,50 @@ fn boot(
   port: Int,
   ready: Subject(Result(Relay, StartError)),
 ) -> Nil {
+  // An interface that will not parse used to fall through to "every
+  // interface", silently. A relay is a thing an operator binds to one address
+  // on purpose, and a typo in that address should not be the difference
+  // between a private relay and a public one.
   let options = case settings.interface {
-    None -> toss.new(port: port)
+    None -> Ok(toss.new(port: port))
     Some(interface) ->
       case glip.parse_ip(interface) {
-        Ok(ip) -> toss.using_interface(toss.new(port: port), ip)
-        Error(Nil) -> toss.new(port: port)
+        Ok(ip) -> Ok(toss.using_interface(toss.new(port: port), ip))
+        Error(Nil) -> Error(BadInterface(interface))
       }
   }
 
-  case toss.open(options) {
-    Error(reason) -> process.send(ready, Error(CouldNotBind(reason)))
-    Ok(listening) -> {
-      let assert Ok(bound) = toss.local_port(listening)
-      let control = process.new_subject()
+  case options {
+    Error(reason) -> process.send(ready, Error(reason))
 
-      process.send(ready, Ok(Relay(bound, control)))
-      let _ = toss.receive_next_datagram_as_message(listening)
-      let _ = process.send_after(control, settings.sweep_interval, Sweep)
+    Ok(options) ->
+      case toss.open(options) {
+        Error(reason) -> process.send(ready, Error(CouldNotBind(reason)))
+        Ok(listening) ->
+          case toss.local_port(listening) {
+            Error(Nil) -> {
+              toss.close(listening)
+              process.send(ready, Error(NoPort))
+            }
 
-      loop(
-        State(settings, listening, dict.new(), dict.new()),
-        process.new_selector()
-          |> process.select_map(control, FromCaller)
-          |> toss.select_udp_messages(FromSocket),
-        control,
-      )
-    }
+            Ok(bound) -> {
+              let control = process.new_subject()
+
+              process.send(ready, Ok(Relay(bound, control)))
+              let _ = toss.receive_next_datagram_as_message(listening)
+              let _ =
+                process.send_after(control, settings.sweep_interval, Sweep)
+
+              loop(
+                State(settings, listening, dict.new(), dict.new(), []),
+                process.new_selector()
+                  |> process.select_map(control, FromCaller)
+                  |> toss.select_udp_messages(FromSocket),
+                control,
+              )
+            }
+          }
+      }
   }
 }
 
@@ -394,49 +448,57 @@ fn from_client(
     Ok(#(target, payload)) ->
       case check_replay(state, data) {
         Error(reason) -> {
-          state.settings.watching(Rejected(Replayed(reason)))
+          state.settings.watching(Rejected(reason))
           state
         }
 
-        Ok(Nil) -> {
-          let #(state, session) = session_for(state, host, port)
+        Ok(Nil) ->
+          case session_for(state, host, port) {
+            Error(reason) -> {
+              state.settings.watching(Rejected(NoSocket(reason)))
+              state
+            }
 
-          case
-            toss.send_to_host(
-              session.socket,
-              address.host(target),
-              address.port(target),
-              payload,
-            )
-          {
-            Error(_) -> {
-              state.settings.watching(Rejected(Undeliverable))
-              state
-            }
-            Ok(Nil) -> {
-              state.settings.watching(Forwarded(
-                target,
-                bit_array.byte_size(payload),
-              ))
-              state
-            }
+            Ok(#(state, session)) ->
+              case
+                toss.send_to_host(
+                  session.socket,
+                  address.host(target),
+                  address.port(target),
+                  payload,
+                )
+              {
+                Error(reason) -> {
+                  state.settings.watching(Rejected(Undeliverable(reason)))
+                  state
+                }
+                Ok(Nil) -> {
+                  state.settings.watching(Forwarded(
+                    target,
+                    bit_array.byte_size(payload),
+                  ))
+                  state
+                }
+              }
           }
-        }
       }
   }
 }
 
-fn check_replay(
-  state: State,
-  packet: BitArray,
-) -> Result(Nil, replay.ReplayError) {
+fn check_replay(state: State, packet: BitArray) -> Result(Nil, Rejection) {
   case
     state.settings.sharing,
     datagram.salt_of(state.settings.session, packet)
   {
     NoGuard, _ | _, Error(_) -> Ok(Nil)
     SharedGuard(guard), Ok(salt) ->
-      replay_guard.observe(guard, salt, within: state.settings.guard_timeout)
+      case
+        replay_guard.observe(guard, salt, within: state.settings.guard_timeout)
+      {
+        Ok(Nil) -> Ok(Nil)
+        Error(replay_guard.Refused(reason)) -> Error(Replayed(reason))
+        Error(replay_guard.Unavailable) -> Error(GuardUnavailable)
+      }
     // Unreachable: `start` replaces OwnGuard before the process is spawned.
     OwnGuard, Ok(_) -> Ok(Nil)
   }
@@ -447,33 +509,44 @@ fn session_for(
   state: State,
   host: glip.IpAddress,
   port: Int,
-) -> #(State, Session) {
+) -> Result(#(State, Session), toss.Error) {
   let name = client_key(host, port)
 
   case dict.get(state.sessions, name) {
     Ok(session) -> {
       let refreshed = Session(..session, used: clock.now_ms())
-      #(
+      Ok(#(
         State(..state, sessions: dict.insert(state.sessions, name, refreshed)),
         refreshed,
-      )
+      ))
     }
 
     Error(Nil) -> {
       let state = make_room(state)
-      let assert Ok(socket) = toss.open(toss.new(port: 0))
-      let _ = toss.receive_next_datagram_as_message(socket)
 
-      let session = Session(socket, host, port, clock.now_ms())
-      let state =
-        State(
-          ..state,
-          sessions: dict.insert(state.sessions, name, session),
-          owners: dict.insert(state.owners, socket, name),
-        )
+      // This used to be a `let assert`, which made the relay's own crash the
+      // answer to running out of file descriptors. That is reachable from the
+      // outside and cheaply: every new source address opens a socket, UDP
+      // source addresses are forged for free, and the process descriptor limit
+      // is commonly reached an order of magnitude below `max_sessions`. The
+      // relay drops the packet instead, and says which packet and why.
+      case toss.open(toss.new(port: 0)) {
+        Error(reason) -> Error(reason)
+        Ok(socket) -> {
+          let _ = toss.receive_next_datagram_as_message(socket)
 
-      state.settings.watching(SessionOpened(dict.size(state.sessions)))
-      #(state, session)
+          let session = Session(socket, host, port, clock.now_ms())
+          let state =
+            State(
+              ..state,
+              sessions: dict.insert(state.sessions, name, session),
+              owners: dict.insert(state.owners, socket, name),
+            )
+
+          state.settings.watching(SessionOpened(dict.size(state.sessions)))
+          Ok(#(state, session))
+        }
+      }
     }
   }
 }
@@ -484,39 +557,71 @@ fn session_for(
 /// whoever arrived last rather than whoever has been quiet longest, and it
 /// would leave a full table permanently full. UDP source addresses are forged
 /// for free, so neither answer is good; this one keeps recent traffic working.
+///
+/// ### Why a queue rather than a scan
+///
+/// This used to walk the whole table for its minimum on every packet from a
+/// new source. Measured on this table's default ceiling, that walk is about ten
+/// milliseconds — and the relay is one process, so at the ceiling the whole
+/// relay ran at about a hundred packets a second, for every client.
+///
+/// The trap is that reaching the ceiling and paying that cost are the same
+/// event: the table fills because somebody is forging source addresses, and
+/// every forged packet then bought ten milliseconds of the relay's only
+/// process. The defence was the amplifier.
+///
+/// So the walk happens once and puts a batch of names aside; the next
+/// `max_sessions / 64` evictions are a list head and a dictionary delete. Names
+/// that expired on their own in the meantime are skipped, which is why this
+/// recurses rather than trusting the queue.
 fn make_room(state: State) -> State {
   case dict.size(state.sessions) < state.settings.max_sessions {
     True -> state
     False ->
-      case oldest(dict.to_list(state.sessions), None) {
-        None -> state
-        Some(#(name, session)) -> {
-          toss.close(session.socket)
-          let state =
-            State(
-              ..state,
-              sessions: dict.delete(state.sessions, name),
-              owners: dict.delete(state.owners, session.socket),
-            )
-          state.settings.watching(SessionEvicted(dict.size(state.sessions)))
-          state
-        }
+      case state.evictable {
+        [name, ..rest] ->
+          make_room(evict(State(..state, evictable: rest), name))
+        [] ->
+          case queue_evictions(state) {
+            // Nothing to evict and no room: the table is full of entries that
+            // are not there. Leave it rather than loop.
+            State(evictable: [], ..) -> state
+            state -> make_room(state)
+          }
       }
   }
 }
 
-fn oldest(
-  entries: List(#(String, Session)),
-  best: Option(#(String, Session)),
-) -> Option(#(String, Session)) {
-  case entries, best {
-    [], _ -> best
-    [first, ..rest], None -> oldest(rest, Some(first))
-    [#(name, session), ..rest], Some(#(_, held)) ->
-      case session.used < held.used {
-        True -> oldest(rest, Some(#(name, session)))
-        False -> oldest(rest, best)
-      }
+/// One pass over the table, putting the oldest names aside for later.
+fn queue_evictions(state: State) -> State {
+  let batch = int.max(1, state.settings.max_sessions / 64)
+
+  let evictable =
+    dict.to_list(state.sessions)
+    |> list.sort(fn(one, other) {
+      int.compare({ one.1 }.used, { other.1 }.used)
+    })
+    |> list.take(batch)
+    |> list.map(fn(entry) { entry.0 })
+
+  State(..state, evictable:)
+}
+
+/// Drop one client by name, if it is still there.
+fn evict(state: State, name: String) -> State {
+  case dict.get(state.sessions, name) {
+    Error(Nil) -> state
+    Ok(session) -> {
+      toss.close(session.socket)
+      let state =
+        State(
+          ..state,
+          sessions: dict.delete(state.sessions, name),
+          owners: dict.delete(state.owners, session.socket),
+        )
+      state.settings.watching(SessionEvicted(dict.size(state.sessions)))
+      state
+    }
   }
 }
 
@@ -538,10 +643,18 @@ fn from_target(
           // Every reply carries its own salt, and the source address of the
           // reply is what the client is told the packet came from.
           let packet = datagram.seal(state.settings.session, source, data)
-          let _ =
-            toss.send_to(state.listening, session.host, session.port, packet)
 
-          state.settings.watching(Returned(source, bit_array.byte_size(data)))
+          case
+            toss.send_to(state.listening, session.host, session.port, packet)
+          {
+            Error(reason) ->
+              state.settings.watching(Rejected(Unanswerable(reason)))
+            Ok(Nil) ->
+              state.settings.watching(Returned(
+                source,
+                bit_array.byte_size(data),
+              ))
+          }
 
           State(
             ..state,
@@ -594,7 +707,10 @@ fn sweep(state: State) -> State {
           )
         })
 
-      state.settings.watching(SessionExpired(dict.size(state.sessions)))
+      state.settings.watching(SessionExpired(
+        list.length(expired),
+        dict.size(state.sessions),
+      ))
       state
     }
   }

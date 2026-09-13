@@ -69,6 +69,10 @@ fn describe(event: server.Event) -> String {
     server.Handshook(target) -> "handshook " <> string.inspect(target)
     server.Probed(probe) -> "probed " <> string.inspect(probe)
     server.TargetUnreachable(_) -> "unreachable"
+    server.Refused -> "refused"
+    server.Overflowed(held) -> "overflowed " <> int.to_string(held)
+    server.Idled -> "idled"
+    server.Broke(reason) -> "broke " <> string.inspect(reason)
     server.Finished -> "finished"
   }
 }
