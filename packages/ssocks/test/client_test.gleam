@@ -178,6 +178,61 @@ pub fn a_url_is_all_it_takes_test() {
   assert returned == <<"three lines":utf8>>
 }
 
+pub fn a_target_already_parsed_does_not_need_parsing_again_test() {
+  // `connect_to` is what every caller with an `address.Address` in hand wants
+  // — `ssocks/local` gets one out of a SOCKS5 request — and until this test
+  // nothing but `connect` reached it.
+  let #(port, _) = shadowsocks_echo.start(session())
+  let assert Ok(target) = address.parse("example.org:443")
+
+  let assert Ok(connection) =
+    client.connect_to(config_for(port), target, within: 2000)
+  let assert Ok(connection) = client.send(connection, <<"parsed":utf8>>)
+  let assert Ok(#(connection, returned)) =
+    client.receive(connection, within: 2000)
+
+  assert returned == <<"parsed":utf8>>
+  client.close(connection)
+}
+
+pub fn the_facade_covers_a_whole_connection_test() {
+  // `connect`, `close`, `chunks_read` and both `explain`s, none of which any
+  // test reached before: the façade is the single-import path the README
+  // opens with, and half of it was unexercised.
+  let #(port, _) = shadowsocks_echo.start(session())
+  let uri = url.to_string(config_for(port))
+
+  let assert Ok(config) = ssocks.from_uri(uri)
+  let assert Ok(connection) =
+    ssocks.connect(config, to: "example.org:443", within: 2000)
+
+  assert ssocks.chunks_read(connection) == 0
+
+  let assert Ok(connection) = ssocks.send(connection, <<"one":utf8>>)
+  let assert Ok(#(connection, returned)) =
+    ssocks.receive(connection, within: 2000)
+
+  assert returned == <<"one":utf8>>
+  assert ssocks.chunks_read(connection) > 0
+
+  ssocks.close(connection)
+}
+
+pub fn the_facade_can_explain_both_of_its_failures_test() {
+  // The single-import path has two error types and used to be able to explain
+  // one of them, which left `from_uri` — the first thing a caller does — with
+  // no sentence at all.
+  let assert Error(reason) = ssocks.from_uri("https://example.com")
+  let explained = ssocks.explain_config(reason)
+  assert explained != ""
+  assert string.contains(explained, "https")
+
+  let assert Ok(config) = ssocks.from_uri(url.to_string(config_for(1)))
+  let assert Error(reason) =
+    ssocks.connect(config, to: "example.org:443", within: 500)
+  assert ssocks.explain(reason) != ""
+}
+
 // --- helpers ------------------------------------------------------------------
 
 fn is_unreachable(reason: client.ClientError) -> Bool {
