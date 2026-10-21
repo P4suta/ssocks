@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name = "ssocks"
+summary = "Experimental, unaudited Shadowsocks libraries for Gleam"
+install = """
+git clone https://github.com/P4suta/ssocks.git
+cd ssocks
+mise install
+mise run deps
+"""
+usage_language = "gleam"
+usage = '''
+import gleam/io
+import ssocks/url
+
+pub fn main() {
+  let assert Ok(config) =
+    url.parse("ss://YWVzLTI1Ni1nY206cGFzc3dk@example.com:8388#Tokyo")
+  io.println(url.redacted(config))
+}
+'''
+documentation_index = true
+copyright = "2026 ssocks contributors"
+license = "MIT OR Apache-2.0"
+
+[[consent]]
+contributor = "Yasunobu"
+evidence = "https://github.com/P4suta/ssocks/commit/31d13a8918fc0cc0c57d4fc1fcdfc9a3701b7c2c"
