@@ -21,14 +21,13 @@ env:
   REQUIRED_GATE: |
     def gate:
       type == "object"
-      and ((keys | sort) == ["changes", "check", "docs", "interop"])
+      and ((keys | sort) == ["changes", "check"])
       and all(.[]; type == "object")
       and .changes.result == "success"
       and (.changes.outputs | type == "object")
       and (.changes.outputs.runtime as $runtime
         | ($runtime == "true" or $runtime == "false")
-        and ([.check.result, .docs.result, .interop.result]
-          | all(.[]; . == (if $runtime == "true" then "success" else "skipped" end))));
+        and (.check.result == (if $runtime == "true" then "success" else "skipped" end)));
 
 jobs:
   changes:
@@ -63,27 +62,24 @@ jobs:
           jq --null-input --exit-status "${REQUIRED_GATE}"'
             def sample($selector; $states):
               {changes: {result: $states[0], outputs: {runtime: $selector}},
-               check: {result: $states[1]}, docs: {result: $states[2]},
-               interop: {result: $states[3]}};
-            [sample("true"; ["success", "success", "success", "success"]),
-             sample("false"; ["success", "skipped", "skipped", "skipped"])] as $valid
+               check: {result: $states[1]}};
+            [sample("true"; ["success", "success"]),
+             sample("false"; ["success", "skipped"])] as $valid
             | ["true", "false", null, "", "unknown", true, false] as $selectors
             | ["success", "failure", "cancelled", "skipped", null, "", "unknown"] as $states
             | [$selectors[] as $selector
                | $states[] as $changes
                | $states[] as $check
-               | $states[] as $docs
-               | $states[] as $interop
-               | sample($selector; [$changes, $check, $docs, $interop])
+               | sample($selector; [$changes, $check])
                | . as $candidate
                | (gate) == ($valid | any(.[]; . == $candidate))] as $checks
             | [null, [], {}, ($valid[0] | del(.check)),
                ($valid[0] | del(.changes.outputs)),
                ($valid[0] | .changes.outputs = []),
-               ($valid[0] | .interop = "invalid")] as $invalid
-            | if (($checks | length) == 16807 and all($checks[]; .)
+               ($valid[0] | .check = "invalid")] as $invalid
+            | if (($checks | length) == 343 and all($checks[]; .)
                   and all($invalid[]; gate | not))
-              then {checked: 16814}
+              then {checked: 350}
               else false
               end
           '
@@ -118,46 +114,19 @@ jobs:
       - run: mise run test-cross
       - run: mise run backends
 
-  interop:
-    needs: changes
-    if: needs.changes.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde  # v5.2.1
-        with:
-          version: v2026.10.14
-          install_args: gleam erlang node
-          experimental: true
-      - run: mise run interop-fetch
-      - run: mise run deps
-      - run: mise run interop
-
-  docs:
-    needs: changes
-    if: needs.changes.outputs.runtime == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde  # v5.2.1
-        with:
-          version: v2026.10.14
-          install_args: gleam erlang
-          experimental: true
-      - run: mise run deps
-      - run: mise run docs-codec
-      - run: mise run docs-net
+      - if: runner.os == 'Linux'
+        run: mise run interop-fetch
+      - if: runner.os == 'Linux'
+        run: mise run interop
+      - if: runner.os == 'Linux'
+        run: mise run docs-codec
+      - if: runner.os == 'Linux'
+        run: mise run docs-net
 
   required:
     name: required
     if: always()
-    needs: [changes, check, interop, docs]
+    needs: [changes, check]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
