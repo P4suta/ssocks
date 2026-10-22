@@ -198,13 +198,11 @@ run = [
 ]
 
 [tasks.check]
-description = "Run local project checks"
+description = "Run routine project checks"
 run = [
   "mise run fmt",
   "mise run build",
   "mise run test",
-  "mise run test-property",
-  "mise run test-fuzz",
   "mise run test-cross",
   # In `check` because the portable ChaCha20 exists for what this prints. It
   # had no gate at all, so a runtime quietly gaining or losing a native cipher

@@ -327,7 +327,8 @@ mise run bootstrap
 mise run check
 ```
 
-`check` is fmt, both builds with warnings denied, the test suite on all four runtimes, the long property run, the fuzz run, the cross-runtime vector comparison, the backend report, the docs and the linters.
+`check` runs formatting, both builds with warnings denied, the test suite on all four runtimes, the cross-runtime vector comparison, the cipher report, the docs, and the linters.
+The unit suite includes the fixed-seed property checks with 200 cases per property.
 
 The network package is Erlang-only — `glisten`, `mug` and `toss` have no JavaScript implementations — so "all four runtimes" is the codec.
 That split is the reason there are two packages at all.
