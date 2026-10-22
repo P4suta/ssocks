@@ -7,6 +7,7 @@ Experimental, unaudited Shadowsocks libraries for Gleam.
 ```sh
 git clone https://github.com/P4suta/ssocks.git
 cd ssocks
+mise trust
 mise install
 mise run deps
 ```

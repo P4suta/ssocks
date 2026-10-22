@@ -6,6 +6,7 @@ summary = "Experimental, unaudited Shadowsocks libraries for Gleam"
 install = """
 git clone https://github.com/P4suta/ssocks.git
 cd ssocks
+mise trust
 mise install
 mise run deps
 """
