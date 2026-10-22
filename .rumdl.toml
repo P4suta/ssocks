@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 ssocks contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[MD013]
+line-length = 0
+heading-line-length = 80
+code-block-line-length = 80
+reflow = true
+reflow-mode = "sentence-per-line"
