@@ -1,0 +1,8 @@
+// SPDX-FileCopyrightText: 2026 ssocks contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: ['github>P4suta/renovate-config'],
+}
