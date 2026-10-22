@@ -355,6 +355,13 @@ That script is also where the Deno leg lives: `gleam test --runtime deno` cannot
 
 [mise]: https://mise.jdx.dev
 
+## Continuous integration
+
+Every change runs workflow, formatting, spelling, secret, and license checks.
+Changes to source, dependencies, tasks, or workflow configuration also run the runtime tests, cross-runtime vectors, cipher reports, interoperability checks, and API documentation builds.
+CI runs for pull requests and merge queue entries.
+The required check rejects missing selections and failed or skipped selected jobs.
+
 ## Licence
 
 MIT or Apache-2.0, at your option.
