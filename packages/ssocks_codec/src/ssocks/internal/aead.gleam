@@ -41,7 +41,8 @@ pub type Unsupported {
 }
 
 /// Explanation attached to every refusal to run AES portably.
-pub const no_portable_aes = "ssocks contains no hand-written AES. AES-GCM is available only through the runtime's own crypto library."
+pub const no_portable_aes =
+  "ssocks contains no hand-written AES. AES-GCM is available only through the runtime's own crypto library."
 
 /// Can this runtime run `backend` for `chosen_method`?
 pub fn supports(backend: Backend, chosen_method: Method) -> Bool {

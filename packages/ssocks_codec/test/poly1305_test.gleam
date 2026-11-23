@@ -21,7 +21,8 @@ import vector.{bytes}
 
 // --- 2.5.2: the worked example ---------------------------------------------
 
-const example_key = "85d6be7857556d337f4452fe42d506a8
+const example_key =
+  "85d6be7857556d337f4452fe42d506a8
                      0103808afb0db2fd4abff6af4149f51b"
 
 const example_message = "Cryptographic Forum Research Group"
@@ -47,10 +48,12 @@ pub fn rfc8439_vector_1_authenticates_zeros_under_a_zero_key_as_zero_test() {
 
 // --- A.3 test vector 4: a message that is not a whole number of blocks ------
 
-const jabberwocky_key = "1c9240a5eb55d38af3338886 04f6b5f0
+const jabberwocky_key =
+  "1c9240a5eb55d38af3338886 04f6b5f0
                          473917c1402b80099dca5cbc 207075c0"
 
-const jabberwocky = "'Twas brillig, and the slithy toves
+const jabberwocky =
+  "'Twas brillig, and the slithy toves
 Did gyre and gimble in the wabe:
 All mimsy were the borogoves,
 And the mome raths outgrabe."
