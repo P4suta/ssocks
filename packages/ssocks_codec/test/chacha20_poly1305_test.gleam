@@ -15,7 +15,8 @@ import gleam/list
 import ssocks/cipher/chacha20_poly1305 as aead
 import vector.{bytes}
 
-const key = "808182838485868788898a8b8c8d8e8f
+const key =
+  "808182838485868788898a8b8c8d8e8f
              909192939495969798999a9b9c9d9e9f"
 
 // --- 2.6.2: deriving the one-time Poly1305 key ------------------------------
@@ -44,9 +45,11 @@ const nonce = "070000004041424344454647"
 
 const aad = "50515253c0c1c2c3c4c5c6c7"
 
-const plaintext = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+const plaintext =
+  "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
 
-const expected_ciphertext = "d31a8d34648e60db7b86afbc53ef7ec2
+const expected_ciphertext =
+  "d31a8d34648e60db7b86afbc53ef7ec2
                              a4aded51296e08fea9e2b5a736ee62d6
                              3dbea45e8ca9671282fafb69da92728b
                              1a71de0a9e060b2905d6a5b67ecd3b36
